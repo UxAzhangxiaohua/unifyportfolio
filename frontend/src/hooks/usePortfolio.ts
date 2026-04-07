@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchPortfolio, fetchHistory, fetchMetrics, fetchTrades } from '../lib/api';
+import { fetchPortfolio, fetchHistory, fetchMetrics, fetchTrades, fetchHistoryAccounts } from '../lib/api';
 import type { TimePeriod } from '../types';
 
 export function usePortfolio() {
@@ -11,12 +11,21 @@ export function usePortfolio() {
   });
 }
 
-export function useHistory(period: TimePeriod) {
+export function useHistory(period: TimePeriod, accountId?: string) {
   return useQuery({
-    queryKey: ['history', period],
-    queryFn: () => fetchHistory(period),
+    queryKey: ['history', period, accountId ?? 'total'],
+    queryFn: () => fetchHistory(period, accountId),
     refetchInterval: 30_000,
     staleTime: 15_000,
+  });
+}
+
+export function useHistoryAccounts() {
+  return useQuery({
+    queryKey: ['history-accounts'],
+    queryFn: fetchHistoryAccounts,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 }
 
