@@ -1,11 +1,13 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { startScheduler } from './scheduler.js';
 import { cacheGetAll, cacheGet, cacheGetHealth } from './cache.js';
+import { startHistorySampler, historyGet, metricsGet } from './history.js';
 import type { PortfolioResponse } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +27,7 @@ if (existsSync(configPath)) {
   try {
     const config = loadConfig();
     startScheduler(config);
+    startHistorySampler(() => cacheGetAll(), 30_000);
     configLoaded = true;
   } catch (err) {
     console.error('Failed to load config:', err instanceof Error ? err.message : err);
@@ -65,6 +68,17 @@ app.get('/api/portfolio', async (): Promise<PortfolioResponse> => {
   };
 });
 
+// Equity history
+app.get<{ Querystring: { period?: string } }>('/api/history', async (request) => {
+  const period = request.query.period ?? '24h';
+  return historyGet(period);
+});
+
+// Performance metrics
+app.get('/api/metrics', async () => {
+  return metricsGet();
+});
+
 // Single account
 app.get<{ Params: { accountId: string } }>('/api/portfolio/:accountId', async (request, reply) => {
   if (!configLoaded) {
@@ -79,6 +93,25 @@ app.get<{ Params: { accountId: string } }>('/api/portfolio/:accountId', async (r
   }
   return snapshot;
 });
+
+// Serve frontend static files in production
+const frontendDist = resolve(__dirname, '../../frontend/dist');
+if (existsSync(frontendDist)) {
+  await app.register(fastifyStatic, {
+    root: frontendDist,
+    prefix: '/',
+    wildcard: false,
+  });
+
+  // SPA fallback: serve index.html for non-API routes
+  app.setNotFoundHandler(async (request, reply) => {
+    if (request.url.startsWith('/api/')) {
+      reply.status(404).send({ error: 'Not found' });
+      return;
+    }
+    return reply.sendFile('index.html');
+  });
+}
 
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) {

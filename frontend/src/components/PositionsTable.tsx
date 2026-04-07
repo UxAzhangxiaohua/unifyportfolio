@@ -41,7 +41,7 @@ interface FlatPosition {
 }
 
 export function PositionsTable({ accounts }: { accounts: AccountSnapshot[] }) {
-  const [sortKey, setSortKey] = useState<SortKey>('pnl');
+  const [sortKey, setSortKey] = useState<SortKey>('value');
   const [sortAsc, setSortAsc] = useState(false);
   const [filterExchange, setFilterExchange] = useState<ExchangeType | 'all'>('all');
 
@@ -56,11 +56,8 @@ export function PositionsTable({ accounts }: { accounts: AccountSnapshot[] }) {
   }, [accounts]);
 
   const filtered = useMemo(() => {
-    let result = allPositions;
-    if (filterExchange !== 'all') {
-      result = result.filter(p => p.exchange === filterExchange);
-    }
-    return result;
+    if (filterExchange === 'all') return allPositions;
+    return allPositions.filter(p => p.exchange === filterExchange);
   }, [allPositions, filterExchange]);
 
   const sorted = useMemo(() => {
@@ -81,39 +78,39 @@ export function PositionsTable({ accounts }: { accounts: AccountSnapshot[] }) {
   }, [filtered, sortKey, sortAsc]);
 
   const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortKey(key);
-      setSortAsc(false);
-    }
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(false); }
   };
 
   const exchanges = [...new Set(allPositions.map(p => p.exchange))];
-
   if (allPositions.length === 0) return null;
 
-  const SortHeader = ({ label, sortKeyVal, align = 'left' }: { label: string; sortKeyVal: SortKey; align?: string }) => (
+  const SortHeader = ({ label, k, right }: { label: string; k: SortKey; right?: boolean }) => (
     <th
-      className={`p-3 font-medium cursor-pointer hover:text-text-primary transition-colors ${align === 'right' ? 'text-right' : 'text-left'}`}
-      onClick={() => handleSort(sortKeyVal)}
+      className={`p-3 font-medium cursor-pointer hover:text-text-primary transition-colors select-none ${right ? 'text-right' : 'text-left'}`}
+      onClick={() => handleSort(k)}
     >
-      {label}
-      {sortKey === sortKeyVal && (
-        <span className="ml-1">{sortAsc ? '\u2191' : '\u2193'}</span>
-      )}
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {sortKey === k && (
+          <span className="text-accent">{sortAsc ? '\u2191' : '\u2193'}</span>
+        )}
+      </span>
     </th>
   );
 
   return (
-    <div className="bg-bg-card border border-border-card rounded-lg overflow-hidden">
+    <div className="bg-bg-card border border-border-card rounded-xl overflow-hidden">
       <div className="p-4 border-b border-border-card flex items-center justify-between">
         <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-          Positions ({filtered.length})
+          Positions
+          <span className="ml-2 text-text-muted font-normal">{filtered.length}</span>
         </h3>
         <div className="flex gap-1">
           <button
-            className={`text-[10px] px-2 py-0.5 rounded ${filterExchange === 'all' ? 'bg-text-secondary/20 text-text-primary' : 'text-text-muted hover:text-text-secondary'}`}
+            className={`text-[10px] px-2.5 py-1 rounded-md font-medium transition-all ${
+              filterExchange === 'all' ? 'bg-accent/15 text-accent' : 'text-text-muted hover:text-text-secondary'
+            }`}
             onClick={() => setFilterExchange('all')}
           >
             ALL
@@ -121,7 +118,9 @@ export function PositionsTable({ accounts }: { accounts: AccountSnapshot[] }) {
           {exchanges.map(ex => (
             <button
               key={ex}
-              className={`text-[10px] px-2 py-0.5 rounded ${filterExchange === ex ? 'bg-text-secondary/20 text-text-primary' : 'text-text-muted hover:text-text-secondary'}`}
+              className={`text-[10px] px-2.5 py-1 rounded-md font-medium transition-all ${
+                filterExchange === ex ? 'bg-accent/15 text-accent' : 'text-text-muted hover:text-text-secondary'
+              }`}
               onClick={() => setFilterExchange(ex)}
             >
               {EXCHANGE_NAMES[ex]}
@@ -133,54 +132,69 @@ export function PositionsTable({ accounts }: { accounts: AccountSnapshot[] }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-text-muted text-[10px] uppercase tracking-wider">
-              <SortHeader label="Exchange" sortKeyVal="exchange" />
-              <SortHeader label="Symbol" sortKeyVal="symbol" />
-              <SortHeader label="Side" sortKeyVal="side" />
+              <SortHeader label="Exchange" k="exchange" />
+              <SortHeader label="Symbol" k="symbol" />
+              <SortHeader label="Side" k="side" />
               <th className="p-3 text-right font-medium">Size</th>
               <th className="p-3 text-right font-medium">Entry</th>
               <th className="p-3 text-right font-medium">Mark</th>
-              <SortHeader label="PnL" sortKeyVal="pnl" align="right" />
-              <SortHeader label="Value" sortKeyVal="value" align="right" />
-              <SortHeader label="Lev" sortKeyVal="leverage" align="right" />
+              <SortHeader label="PnL" k="pnl" right />
+              <SortHeader label="Value" k="value" right />
+              <SortHeader label="Lev" k="leverage" right />
               <th className="p-3 text-right font-medium">Liq Price</th>
             </tr>
           </thead>
           <tbody>
-            {sorted.map((p, i) => (
-              <tr
-                key={`${p.exchange}-${p.symbol}-${i}`}
-                className="border-t border-border-card hover:bg-bg-card-hover transition-colors"
-              >
-                <td className="p-3 text-text-muted text-xs">{EXCHANGE_NAMES[p.exchange]}</td>
-                <td className="p-3 font-semibold">{p.symbol}</td>
-                <td className="p-3">
-                  <span className={
-                    p.side === 'long' ? 'text-profit' :
-                    p.side === 'short' ? 'text-loss' :
-                    'text-text-secondary'
-                  }>
-                    {p.side.toUpperCase()}
-                  </span>
-                </td>
-                <td className="p-3 text-right tabular-nums">{formatNum(p.quantity, p.quantity < 1 ? 4 : 2)}</td>
-                <td className="p-3 text-right tabular-nums text-text-secondary">{formatNum(p.avgPrice)}</td>
-                <td className="p-3 text-right tabular-nums">{formatNum(p.currentPrice)}</td>
-                <td className={`p-3 text-right tabular-nums font-medium ${
-                  p.unrealizedPnl > 0 ? 'text-profit' :
-                  p.unrealizedPnl < 0 ? 'text-loss' :
-                  'text-text-secondary'
-                }`}>
-                  {formatPnl(p.unrealizedPnl)}
-                </td>
-                <td className="p-3 text-right tabular-nums text-text-secondary">{formatUSD(p.marketValue)}</td>
-                <td className="p-3 text-right tabular-nums text-text-secondary">
-                  {p.leverage ? `${p.leverage}x` : '-'}
-                </td>
-                <td className="p-3 text-right tabular-nums text-text-muted">
-                  {p.liquidationPrice ? formatNum(p.liquidationPrice) : '-'}
-                </td>
-              </tr>
-            ))}
+            {sorted.map((p, i) => {
+              const pnlPct = p.avgPrice > 0 && p.quantity > 0
+                ? ((p.currentPrice - p.avgPrice) / p.avgPrice * 100 * (p.side === 'short' ? -1 : 1))
+                : 0;
+
+              return (
+                <tr
+                  key={`${p.exchange}-${p.symbol}-${i}`}
+                  className="border-t border-border-card hover:bg-bg-card-hover transition-colors"
+                >
+                  <td className="p-3 text-text-muted text-xs">{EXCHANGE_NAMES[p.exchange]}</td>
+                  <td className="p-3 font-semibold">{p.symbol}</td>
+                  <td className="p-3">
+                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                      p.side === 'long' ? 'bg-profit/10 text-profit' :
+                      p.side === 'short' ? 'bg-loss/10 text-loss' :
+                      'text-text-secondary'
+                    }`}>
+                      {p.side.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="p-3 text-right tabular-nums">{formatNum(p.quantity, p.quantity < 1 ? 4 : 2)}</td>
+                  <td className="p-3 text-right tabular-nums text-text-secondary">{formatNum(p.avgPrice)}</td>
+                  <td className="p-3 text-right tabular-nums">{formatNum(p.currentPrice)}</td>
+                  <td className="p-3 text-right">
+                    <div className={`tabular-nums font-medium ${
+                      p.unrealizedPnl > 0 ? 'text-profit' :
+                      p.unrealizedPnl < 0 ? 'text-loss' :
+                      'text-text-secondary'
+                    }`}>
+                      {formatPnl(p.unrealizedPnl)}
+                    </div>
+                    {pnlPct !== 0 && (
+                      <div className={`text-[10px] tabular-nums ${
+                        pnlPct > 0 ? 'text-profit/70' : 'text-loss/70'
+                      }`}>
+                        {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+                      </div>
+                    )}
+                  </td>
+                  <td className="p-3 text-right tabular-nums text-text-secondary">{formatUSD(p.marketValue)}</td>
+                  <td className="p-3 text-right tabular-nums text-text-secondary">
+                    {p.leverage ? `${p.leverage}x` : '-'}
+                  </td>
+                  <td className="p-3 text-right tabular-nums text-text-muted">
+                    {p.liquidationPrice ? formatNum(p.liquidationPrice) : '-'}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
