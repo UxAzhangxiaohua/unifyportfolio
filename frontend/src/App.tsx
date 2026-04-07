@@ -5,6 +5,7 @@ import { MetricsRow } from './components/MetricsRow';
 import { AllocationBar } from './components/AllocationBar';
 import { ExchangeCard } from './components/ExchangeCard';
 import { PositionsTable } from './components/PositionsTable';
+import { TradesHistory } from './components/TradesHistory';
 import type { AccountSnapshot, ExchangeType } from './types';
 
 const EXCHANGE_ORDER: ExchangeType[] = ['ibkr', 'hyperliquid', 'binance', 'okx'];
@@ -73,6 +74,9 @@ export default function App() {
 
       {/* Positions Table */}
       <PositionsTable accounts={data.accounts} />
+
+      {/* Trade History */}
+      <TradesHistory />
 
       {/* Footer */}
       <div className="text-center text-text-muted text-[10px] pb-4">

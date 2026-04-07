@@ -1,4 +1,5 @@
 import type { AccountSnapshot } from './types.js';
+import { trackSnapshot } from './trades.js';
 
 interface CacheEntry {
   snapshot: AccountSnapshot;
@@ -20,6 +21,7 @@ export function cacheSet(snapshot: AccountSnapshot): void {
     snapshot,
     expiresAt: Date.now() + ttl,
   });
+  try { trackSnapshot(snapshot); } catch {}
 }
 
 export function cacheGet(accountId: string): AccountSnapshot | null {

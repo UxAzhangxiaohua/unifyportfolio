@@ -58,3 +58,32 @@ export interface MetricsResponse {
 }
 
 export type TimePeriod = '1h' | '4h' | '24h' | '1w' | 'all';
+
+export interface ClosedTrade {
+  id: string;
+  accountId: string;
+  exchange: ExchangeType;
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  realizedPnl: number;
+  pnlPercent: number;
+  entryTime: string;
+  exitTime: string;
+  durationSeconds: number;
+}
+
+export interface TradeSummary {
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalRealizedPnl: number;
+}
+
+export interface TradesResponse {
+  trades: ClosedTrade[];
+  summary: TradeSummary;
+}
