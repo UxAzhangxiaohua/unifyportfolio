@@ -36,3 +36,25 @@ export interface PortfolioResponse {
   accounts: AccountSnapshot[];
   timestamp: string;
 }
+
+export interface HistoryPoint {
+  t: number; // unix seconds
+  v: number; // equity value
+}
+
+export interface HistoryResponse {
+  points: HistoryPoint[];
+  pnl: number;
+  pnlPercent: number;
+  period: string;
+}
+
+export interface MetricsResponse {
+  sharpeRatio: number | null;
+  maxDrawdown: number;
+  maxDrawdownPercent: number;
+  totalEquity: number;
+  changes: Record<string, { pnl: number; percent: number } | null>;
+}
+
+export type TimePeriod = '1h' | '4h' | '24h' | '1w' | 'all';
