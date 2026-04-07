@@ -96,80 +96,78 @@ export class IBKRConnector extends BaseConnector {
 
     // Navigate to the statement data
     const flexStatements = parsed.FlexQueryResponse?.FlexStatements;
-    const statement = flexStatements?.FlexStatement;
+    const rawStatement = flexStatements?.FlexStatement;
 
-    if (!statement) {
+    if (!rawStatement) {
       throw new Error('IBKR: Could not parse FlexStatement from response');
     }
+
+    // Flex Query may return multiple sub-accounts — normalize to array
+    const statements = Array.isArray(rawStatement) ? rawStatement : [rawStatement];
 
     const positions: Position[] = [];
     let totalEquity = 0;
     let availableCash = 0;
     let totalUnrealizedPnl = 0;
 
-    // Parse open positions
-    const openPositions = statement.OpenPositions?.OpenPosition;
-    if (openPositions) {
-      const posArray = Array.isArray(openPositions) ? openPositions : [openPositions];
-      for (const op of posArray) {
-        const qty = parseFloat(op['@_position'] || op.position || '0');
-        if (qty === 0) continue;
+    for (const statement of statements) {
+      // Parse open positions
+      const openPositions = statement.OpenPositions?.OpenPosition;
+      if (openPositions) {
+        const posArray = Array.isArray(openPositions) ? openPositions : [openPositions];
+        for (const op of posArray) {
+          const qty = parseFloat(op['@_position'] || op.position || '0');
+          if (qty === 0) continue;
 
-        const markPrice = parseFloat(op['@_markPrice'] || op.markPrice || '0');
-        const costBasis = parseFloat(op['@_costBasisPrice'] || op.costBasisPrice || '0');
-        const fifoPnl = parseFloat(op['@_fifoPnlUnrealized'] || op.fifoPnlUnrealized || '0');
-        const mktValue = parseFloat(op['@_positionValue'] || op.positionValue || '0');
-        const assetCategory = (op['@_assetCategory'] || op.assetCategory || '').toUpperCase();
+          const markPrice = parseFloat(op['@_markPrice'] || op.markPrice || '0');
+          const costBasis = parseFloat(op['@_costBasisPrice'] || op.costBasisPrice || '0');
+          const fifoPnl = parseFloat(op['@_fifoPnlUnrealized'] || op.fifoPnlUnrealized || '0');
+          const mktValue = parseFloat(op['@_positionValue'] || op.positionValue || '0');
+          const assetCategory = (op['@_assetCategory'] || op.assetCategory || '').toUpperCase();
 
-        let assetClass: Position['assetClass'];
-        if (assetCategory === 'STK') {
-          assetClass = 'stock';
-        } else if (assetCategory === 'ETF' || (op['@_description'] || '').includes('ETF')) {
-          assetClass = 'etf';
-        } else {
-          assetClass = 'stock'; // Default for IBKR
-        }
+          let assetClass: Position['assetClass'];
+          if (assetCategory === 'STK') {
+            assetClass = 'stock';
+          } else if (assetCategory === 'ETF' || (op['@_description'] || '').includes('ETF')) {
+            assetClass = 'etf';
+          } else {
+            assetClass = 'stock'; // Default for IBKR
+          }
 
-        positions.push({
-          symbol: op['@_symbol'] || op.symbol || 'UNKNOWN',
-          side: qty > 0 ? 'long' : 'short',
-          quantity: Math.abs(qty),
-          avgPrice: costBasis,
-          currentPrice: markPrice,
-          unrealizedPnl: fifoPnl,
-          marketValue: Math.abs(mktValue),
-          leverage: null,
-          liquidationPrice: null,
-          assetClass,
-        });
+          positions.push({
+            symbol: op['@_symbol'] || op.symbol || 'UNKNOWN',
+            side: qty > 0 ? 'long' : 'short',
+            quantity: Math.abs(qty),
+            avgPrice: costBasis,
+            currentPrice: markPrice,
+            unrealizedPnl: fifoPnl,
+            marketValue: Math.abs(mktValue),
+            leverage: null,
+            liquidationPrice: null,
+            assetClass,
+          });
 
-        totalUnrealizedPnl += fifoPnl;
-      }
-    }
-
-    // Parse cash report for equity
-    const cashReport = statement.CashReport?.CashReportCurrency;
-    if (cashReport) {
-      const cashArray = Array.isArray(cashReport) ? cashReport : [cashReport];
-      for (const cr of cashArray) {
-        const currency = cr['@_currency'] || cr.currency || '';
-        if (currency === 'BASE_SUMMARY') {
-          totalEquity = parseFloat(cr['@_endingCash'] || cr.endingCash || '0');
-          availableCash = parseFloat(cr['@_endingCash'] || cr.endingCash || '0');
+          totalUnrealizedPnl += fifoPnl;
         }
       }
-    }
 
-    // If no cash report, try to sum position values + guess equity
-    if (totalEquity === 0 && positions.length > 0) {
-      totalEquity = positions.reduce((s, p) => s + p.marketValue, 0);
+      // Parse cash report for equity
+      const cashReport = statement.CashReport?.CashReportCurrency;
+      if (cashReport) {
+        const cashArray = Array.isArray(cashReport) ? cashReport : [cashReport];
+        for (const cr of cashArray) {
+          const currency = cr['@_currency'] || cr.currency || '';
+          if (currency === 'BASE_SUMMARY') {
+            totalEquity += parseFloat(cr['@_endingCash'] || cr.endingCash || '0');
+            availableCash += parseFloat(cr['@_endingCash'] || cr.endingCash || '0');
+          }
+        }
+      }
     }
 
     // Add position market values to equity (cash + positions = total equity)
     const positionValue = positions.reduce((s, p) => s + p.marketValue, 0);
-    if (totalEquity > 0 && positionValue > 0) {
-      totalEquity = totalEquity + positionValue;
-    }
+    totalEquity += positionValue;
 
     return {
       accountId: this.account.id,
