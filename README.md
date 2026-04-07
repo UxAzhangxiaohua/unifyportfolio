@@ -13,7 +13,7 @@ Multi-exchange trading portfolio dashboard that aggregates positions and balance
 
 | Layer    | Stack                          | Port |
 |----------|--------------------------------|------|
-| Backend  | Fastify, Node 22, TypeScript   | 3001 |
+| Backend  | Fastify, Node 22, TypeScript   | 8189 |
 | Frontend | Vite, React 18, Tailwind CSS   | 8188 |
 
 - One connector per exchange (`backend/src/connectors/`)
@@ -45,7 +45,7 @@ cd backend && npm run dev
 cd frontend && npm run dev
 ```
 
-The frontend will be available at `http://localhost:8188` and the backend API at `http://localhost:3001`.
+The frontend will be available at `http://localhost:8188` and the backend API at `http://localhost:8189`.
 
 ## Configuration
 

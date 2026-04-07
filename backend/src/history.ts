@@ -38,7 +38,7 @@ export interface HistoryResponse {
   period: string;
 }
 
-export function historyGet(period: string): HistoryResponse {
+export function historyGet(period: string, accountId?: string): HistoryResponse {
   const cutoff =
     period === 'all'
       ? 0
@@ -50,8 +50,12 @@ export function historyGet(period: string): HistoryResponse {
     return { points: [], pnl: 0, pnlPercent: 0, period };
   }
 
-  const startEquity = filtered[0].total;
-  const currentEquity = filtered[filtered.length - 1].total;
+  const getValue = accountId
+    ? (p: EquityPoint) => p.accounts[accountId] ?? 0
+    : (p: EquityPoint) => p.total;
+
+  const startEquity = getValue(filtered[0]);
+  const currentEquity = getValue(filtered[filtered.length - 1]);
   const pnl = currentEquity - startEquity;
   const pnlPercent = startEquity > 0 ? (pnl / startEquity) * 100 : 0;
 
@@ -61,11 +65,18 @@ export function historyGet(period: string): HistoryResponse {
     filtered.length > maxChart ? downsample(filtered, maxChart) : filtered;
 
   return {
-    points: chartPoints.map((p) => ({ t: p.t, v: p.total })),
+    points: chartPoints.map((p) => ({ t: p.t, v: getValue(p) })),
     pnl,
     pnlPercent,
     period,
   };
+}
+
+/** Return list of account IDs that appear in history */
+export function historyAccounts(): string[] {
+  if (points.length === 0) return [];
+  // Use latest point to get current account list
+  return Object.keys(points[points.length - 1].accounts);
 }
 
 function downsample(data: EquityPoint[], target: number): EquityPoint[] {

@@ -6,8 +6,22 @@ export async function fetchPortfolio(): Promise<PortfolioResponse> {
   return res.json();
 }
 
-export async function fetchHistory(period: TimePeriod): Promise<HistoryResponse> {
-  const res = await fetch(`/api/history?period=${period}`);
+export async function fetchHistory(period: TimePeriod, accountId?: string): Promise<HistoryResponse> {
+  const params = new URLSearchParams({ period });
+  if (accountId) params.set('accountId', accountId);
+  const res = await fetch(`/api/history?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export interface AccountOption {
+  accountId: string;
+  label: string;
+  exchange: string;
+}
+
+export async function fetchHistoryAccounts(): Promise<AccountOption[]> {
+  const res = await fetch('/api/history/accounts');
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

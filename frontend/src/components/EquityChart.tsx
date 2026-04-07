@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createChart, AreaSeries, type IChartApi, type ISeriesApi, ColorType, LineType, type UTCTimestamp } from 'lightweight-charts';
-import { useHistory } from '../hooks/usePortfolio';
+import { useHistory, useHistoryAccounts } from '../hooks/usePortfolio';
 import type { TimePeriod } from '../types';
 
 const PERIODS: { key: TimePeriod; label: string }[] = [
@@ -20,7 +20,9 @@ function formatUSD(n: number, compact = false): string {
 
 export function EquityChart() {
   const [period, setPeriod] = useState<TimePeriod>('24h');
-  const { data: history } = useHistory(period);
+  const [selectedAccount, setSelectedAccount] = useState<string | undefined>(undefined);
+  const { data: history } = useHistory(period, selectedAccount);
+  const { data: accounts } = useHistoryAccounts();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -122,7 +124,9 @@ export function EquityChart() {
       <div className="flex items-center justify-between px-5 pt-4 pb-2">
         <div className="flex items-center gap-4">
           <span className="text-xs text-text-secondary uppercase tracking-wider font-semibold">
-            Portfolio Value
+            {selectedAccount
+              ? accounts?.find((a) => a.accountId === selectedAccount)?.label ?? selectedAccount
+              : 'Portfolio Value'}
           </span>
           {history && history.points.length > 0 && (
             <div className="flex items-center gap-2">
@@ -135,20 +139,55 @@ export function EquityChart() {
             </div>
           )}
         </div>
-        <div className="flex gap-1">
-          {PERIODS.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setPeriod(key)}
-              className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all ${
-                period === key
-                  ? 'bg-accent/15 text-accent'
-                  : 'text-text-muted hover:text-text-secondary hover:bg-bg-card-hover'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          {/* Account filter */}
+          {accounts && accounts.length > 1 && (
+            <div className="flex gap-1">
+              <button
+                onClick={() => setSelectedAccount(undefined)}
+                className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all ${
+                  !selectedAccount
+                    ? 'bg-accent/15 text-accent'
+                    : 'text-text-muted hover:text-text-secondary hover:bg-bg-card-hover'
+                }`}
+              >
+                All
+              </button>
+              {accounts.map((acc) => (
+                <button
+                  key={acc.accountId}
+                  onClick={() => setSelectedAccount(acc.accountId)}
+                  className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all ${
+                    selectedAccount === acc.accountId
+                      ? 'bg-accent/15 text-accent'
+                      : 'text-text-muted hover:text-text-secondary hover:bg-bg-card-hover'
+                  }`}
+                >
+                  {acc.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Separator */}
+          {accounts && accounts.length > 1 && (
+            <div className="w-px h-4 bg-border-card" />
+          )}
+          {/* Period filter */}
+          <div className="flex gap-1">
+            {PERIODS.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setPeriod(key)}
+                className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all ${
+                  period === key
+                    ? 'bg-accent/15 text-accent'
+                    : 'text-text-muted hover:text-text-secondary hover:bg-bg-card-hover'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

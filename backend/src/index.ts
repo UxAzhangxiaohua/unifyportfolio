@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { startScheduler } from './scheduler.js';
 import { cacheGetAll, cacheGet, cacheGetHealth } from './cache.js';
-import { startHistorySampler, historyGet, metricsGet } from './history.js';
+import { startHistorySampler, historyGet, historyAccounts, metricsGet } from './history.js';
 import { tradesGet } from './trades.js';
 import type { PortfolioResponse } from './types.js';
 
@@ -69,9 +69,16 @@ app.get('/api/portfolio', async (): Promise<PortfolioResponse> => {
 });
 
 // Equity history
-app.get<{ Querystring: { period?: string } }>('/api/history', async (request) => {
+app.get<{ Querystring: { period?: string; accountId?: string } }>('/api/history', async (request) => {
   const period = request.query.period ?? '24h';
-  return historyGet(period);
+  const accountId = request.query.accountId || undefined;
+  return historyGet(period, accountId);
+});
+
+// Account list for history filter
+app.get('/api/history/accounts', async () => {
+  const accounts = cacheGetAll();
+  return accounts.map((a) => ({ accountId: a.accountId, label: a.label, exchange: a.exchange }));
 });
 
 // Performance metrics
