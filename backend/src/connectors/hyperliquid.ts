@@ -95,22 +95,23 @@ export class HyperliquidConnector extends BaseConnector {
         });
       }
 
-      const accountValue = parseFloat(perpState.marginSummary.accountValue);
       const marginUsed = parseFloat(perpState.marginSummary.totalMarginUsed);
       const totalUnrealizedPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
 
-      // Add spot value to total equity
-      const spotValue = spotState.balances.reduce((sum, b) => sum + parseFloat(b.total), 0);
+      // For unified accounts, spot USDC total is the source of truth for
+      // account balance across both spot and perps (per Hyperliquid docs)
+      const usdcBalance = spotState.balances.find(b => b.coin === 'USDC');
+      const equity = usdcBalance ? parseFloat(usdcBalance.total) : 0;
 
       return {
         accountId: this.account.id,
         exchange: 'hyperliquid',
         label: this.account.label,
-        equity: accountValue + spotValue,
-        availableBalance: accountValue - marginUsed,
+        equity,
+        availableBalance: equity - marginUsed,
         unrealizedPnl: totalUnrealizedPnl,
         marginUsed,
-        marginRatio: accountValue > 0 ? marginUsed / accountValue : null,
+        marginRatio: equity > 0 ? marginUsed / equity : null,
         positions,
         fetchedAt: new Date().toISOString(),
         isDelayed: false,
