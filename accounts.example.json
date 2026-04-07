@@ -1,0 +1,42 @@
+{
+  "pollIntervalSeconds": 30,
+  "ibkrPollIntervalSeconds": 300,
+  "accounts": [
+    {
+      "id": "ibkr-main",
+      "exchange": "ibkr",
+      "label": "IBKR US Stocks",
+      "credentials": {
+        "flexQueryId": "YOUR_FLEX_QUERY_ID",
+        "flexToken": "YOUR_FLEX_TOKEN"
+      }
+    },
+    {
+      "id": "binance-main",
+      "exchange": "binance",
+      "label": "Binance Main",
+      "credentials": {
+        "apiKey": "YOUR_API_KEY",
+        "apiSecret": "YOUR_API_SECRET"
+      }
+    },
+    {
+      "id": "okx-main",
+      "exchange": "okx",
+      "label": "OKX Main",
+      "credentials": {
+        "apiKey": "YOUR_API_KEY",
+        "apiSecret": "YOUR_API_SECRET",
+        "passphrase": "YOUR_PASSPHRASE"
+      }
+    },
+    {
+      "id": "hl-main",
+      "exchange": "hyperliquid",
+      "label": "Hyperliquid Main",
+      "credentials": {
+        "walletAddress": "0xYOUR_WALLET_ADDRESS"
+      }
+    }
+  ]
+}

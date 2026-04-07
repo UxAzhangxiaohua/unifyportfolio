@@ -1,0 +1,19 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./accounts.json:/app/accounts.json:ro
+    environment:
+      - CONFIG_PATH=/app/accounts.json
+      - BACKEND_PORT=3001
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8188:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
