@@ -8,7 +8,7 @@ export default defineConfig({
     port: 8188,
     allowedHosts: ['pf.zsy.ch'],
     proxy: {
-      '/api': 'http://localhost:3001',
+      '/api': 'http://localhost:8189',
     },
   },
 });

@@ -6,7 +6,7 @@ module.exports = {
       script: 'dist/index.js',
       env: {
         NODE_ENV: 'production',
-        BACKEND_PORT: 3001,
+        BACKEND_PORT: 8188, // serves both API + frontend static in production
       },
       watch: false,
       max_memory_restart: '256M',
