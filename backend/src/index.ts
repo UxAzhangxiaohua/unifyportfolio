@@ -11,7 +11,7 @@ import { startHistorySampler, historyGet, metricsGet } from './history.js';
 import type { PortfolioResponse } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.BACKEND_PORT) || 3001;
+const PORT = Number(process.env.BACKEND_PORT) || 8189;
 
 const app = Fastify({ logger: true });
 
