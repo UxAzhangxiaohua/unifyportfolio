@@ -47,6 +47,27 @@ cd frontend && npm run dev
 
 The frontend will be available at `http://localhost:8188` and the backend API at `http://localhost:8189`.
 
+### Docker
+
+```bash
+# Copy and configure credentials
+cp accounts.example.json accounts.json
+# Edit accounts.json with your read-only API keys
+
+# Build and start
+docker compose up -d --build
+```
+
+Frontend at `http://localhost:8188`, backend API at `http://localhost:8189`.
+
+### PM2 (Production)
+
+```bash
+cd backend && npm install && npm run build
+cd ../frontend && npm install && npm run build
+pm2 start ecosystem.config.cjs
+```
+
 ## Configuration
 
 Account credentials are stored in `accounts.json` (gitignored). Each account entry specifies the exchange, a label, and the required credentials for that exchange.
