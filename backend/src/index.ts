@@ -1,6 +1,5 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,25 +92,6 @@ app.get<{ Params: { accountId: string } }>('/api/portfolio/:accountId', async (r
   }
   return snapshot;
 });
-
-// Serve frontend static files in production
-const frontendDist = resolve(__dirname, '../../frontend/dist');
-if (existsSync(frontendDist)) {
-  await app.register(fastifyStatic, {
-    root: frontendDist,
-    prefix: '/',
-    wildcard: false,
-  });
-
-  // SPA fallback: serve index.html for non-API routes
-  app.setNotFoundHandler(async (request, reply) => {
-    if (request.url.startsWith('/api/')) {
-      reply.status(404).send({ error: 'Not found' });
-      return;
-    }
-    return reply.sendFile('index.html');
-  });
-}
 
 app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
   if (err) {
