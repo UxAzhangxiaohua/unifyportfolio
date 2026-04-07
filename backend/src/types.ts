@@ -81,3 +81,19 @@ export interface PortfolioResponse {
   accounts: AccountSnapshot[];
   timestamp: string;
 }
+
+export interface ClosedTrade {
+  id: string;
+  accountId: string;
+  exchange: ExchangeType;
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  realizedPnl: number;
+  pnlPercent: number;
+  entryTime: string;
+  exitTime: string;
+  durationSeconds: number;
+}

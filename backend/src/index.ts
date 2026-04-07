@@ -7,6 +7,7 @@ import { loadConfig } from './config.js';
 import { startScheduler } from './scheduler.js';
 import { cacheGetAll, cacheGet, cacheGetHealth } from './cache.js';
 import { startHistorySampler, historyGet, metricsGet } from './history.js';
+import { tradesGet } from './trades.js';
 import type { PortfolioResponse } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +77,11 @@ app.get<{ Querystring: { period?: string } }>('/api/history', async (request) =>
 // Performance metrics
 app.get('/api/metrics', async () => {
   return metricsGet();
+});
+
+// Trade history
+app.get('/api/trades', async () => {
+  return tradesGet();
 });
 
 // Single account
