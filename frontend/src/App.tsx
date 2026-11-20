@@ -1,24 +1,24 @@
 import { usePortfolio } from './hooks/usePortfolio';
 import { Header } from './components/Header';
+import { KpiRow } from './components/KpiRow';
 import { EquityChart } from './components/EquityChart';
 import { MetricsRow } from './components/MetricsRow';
-import { AllocationBar } from './components/AllocationBar';
-import { ExchangeCard } from './components/ExchangeCard';
+import { AccountsGrid } from './components/AccountsGrid';
+import { StablesPanel } from './components/StablesPanel';
 import { PositionsTable } from './components/PositionsTable';
+import { OptionsTable } from './components/OptionsTable';
+import { OtherHoldings } from './components/OtherHoldings';
 import { TradesHistory } from './components/TradesHistory';
-import type { AccountSnapshot, ExchangeType } from './types';
-
-const EXCHANGE_ORDER: ExchangeType[] = ['ibkr', 'hyperliquid', 'binance', 'okx'];
 
 export default function App() {
   const { data, isLoading, error, dataUpdatedAt } = usePortfolio();
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen grid place-items-center">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          <span className="text-text-secondary text-sm">Loading portfolio...</span>
+          <div className="w-7 h-7 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+          <span className="text-text-secondary text-sm">加载中…</span>
         </div>
       </div>
     );
@@ -26,65 +26,33 @@ export default function App() {
 
   if (error || !data) {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4">
-        <div className="text-loss text-lg font-semibold">Failed to load portfolio</div>
-        <div className="text-text-muted text-sm">{error?.message ?? 'Unknown error'}</div>
-        <div className="text-text-muted text-xs">Make sure the backend is running on port 3001</div>
+      <div className="min-h-screen grid place-items-center px-4">
+        <div className="card px-6 py-5 text-center max-w-md">
+          <div className="text-loss font-semibold mb-1">无法加载数据</div>
+          <div className="text-text-muted text-sm">{error?.message ?? '未知错误'}</div>
+          <div className="text-text-muted text-xs mt-2">请确认后端 (端口 8189) 正在运行</div>
+        </div>
       </div>
     );
   }
 
-  // Group accounts by exchange
-  const grouped = new Map<ExchangeType, AccountSnapshot[]>();
-  for (const account of data.accounts) {
-    const list = grouped.get(account.exchange) ?? [];
-    list.push(account);
-    grouped.set(account.exchange, list);
-  }
-
   return (
-    <div className="min-h-screen p-6 max-w-7xl mx-auto space-y-4">
-      {/* Header */}
+    <div className="min-h-screen px-4 sm:px-6 py-5 max-w-[1440px] mx-auto space-y-4">
       <Header data={data} />
-
-      {/* Equity Chart */}
-      <EquityChart />
-
-      {/* Metrics Row */}
-      <MetricsRow />
-
-      {/* Allocation Bar */}
-      <AllocationBar accounts={data.accounts} />
-
-      {/* Exchange Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {EXCHANGE_ORDER.map((ex) => {
-          const accounts = grouped.get(ex);
-          if (!accounts) return null;
-          return (
-            <ExchangeCard
-              key={ex}
-              exchange={ex}
-              accounts={accounts}
-              totalPortfolio={data.totalEquity}
-            />
-          );
-        })}
-      </div>
-
-      {/* Positions Table */}
+      <KpiRow data={data} />
+      <AccountsGrid accounts={data.accounts} total={data.totalEquity} />
+      <StablesPanel accounts={data.accounts} />
       <PositionsTable accounts={data.accounts} />
-
-      {/* Trade History */}
-      <TradesHistory />
-
-      {/* Footer */}
-      <div className="text-center text-text-muted text-[10px] pb-4">
-        Auto-refreshes every 15s
-        {dataUpdatedAt > 0 && (
-          <> &middot; {new Date(dataUpdatedAt).toLocaleTimeString()}</>
-        )}
+      <OptionsTable accounts={data.accounts} />
+      <div className="grid grid-cols-1 gap-4">
+        <EquityChart />
+        <MetricsRow />
       </div>
+      <OtherHoldings accounts={data.accounts} />
+      <TradesHistory />
+      <footer className="text-center text-text-muted text-[11px] pb-4">
+        每 15 秒自动刷新{dataUpdatedAt > 0 && <> · {new Date(dataUpdatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</>} · 只读 API
+      </footer>
     </div>
   );
 }

@@ -1,74 +1,41 @@
 import { useMetrics } from '../hooks/usePortfolio';
-
-function formatPnl(n: number): string {
-  const sign = n >= 0 ? '+' : '';
-  return sign + n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
-}
-
-function MetricCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
-  return (
-    <div className="flex flex-col gap-0.5 min-w-0">
-      <span className="text-[10px] text-text-muted uppercase tracking-wider whitespace-nowrap">{label}</span>
-      <span className={`text-sm font-bold tabular-nums ${color ?? 'text-text-primary'}`}>{value}</span>
-      {sub && <span className={`text-[10px] tabular-nums ${color ?? 'text-text-muted'}`}>{sub}</span>}
-    </div>
-  );
-}
+import { fmtPct, fmtSigned } from '../lib/format';
 
 export function MetricsRow() {
-  const { data: metrics } = useMetrics();
+  const { data: m } = useMetrics();
+  if (!m) return null;
 
-  if (!metrics) return null;
-
-  const items: Array<{ label: string; value: string; sub?: string; color?: string }> = [];
-
-  // Sharpe Ratio
+  const items: Array<{ label: string; value: string; sub?: string; tone?: 'up' | 'down' }> = [];
   items.push({
     label: 'Sharpe',
-    value: metrics.sharpeRatio != null ? metrics.sharpeRatio.toFixed(2) : '--',
-    color: metrics.sharpeRatio != null
-      ? metrics.sharpeRatio >= 1 ? 'text-profit' : metrics.sharpeRatio >= 0 ? 'text-text-primary' : 'text-loss'
-      : undefined,
+    value: m.sharpeRatio != null ? m.sharpeRatio.toFixed(2) : '—',
+    tone: m.sharpeRatio == null ? undefined : m.sharpeRatio >= 0 ? 'up' : 'down',
   });
-
-  // Max Drawdown
   items.push({
-    label: 'Max Drawdown',
-    value: metrics.maxDrawdown > 0 ? `-${metrics.maxDrawdownPercent.toFixed(2)}%` : '--',
-    sub: metrics.maxDrawdown > 0 ? `-$${Math.round(metrics.maxDrawdown).toLocaleString()}` : undefined,
-    color: metrics.maxDrawdown > 0 ? 'text-loss' : undefined,
+    label: '最大回撤',
+    value: m.maxDrawdown > 0 ? fmtPct(-m.maxDrawdownPercent) : '—',
+    sub: m.maxDrawdown > 0 ? fmtSigned(-m.maxDrawdown, { decimals: false }) : undefined,
+    tone: m.maxDrawdown > 0 ? 'down' : undefined,
   });
-
-  // Period changes
-  const periods = [
-    { key: '1h', label: '1H PnL' },
-    { key: '4h', label: '4H PnL' },
-    { key: '24h', label: '24H PnL' },
-    { key: '1w', label: '1W PnL' },
-  ];
-
-  for (const { key, label } of periods) {
-    const change = metrics.changes[key];
-    if (change) {
-      const isPos = change.pnl >= 0;
-      items.push({
-        label,
-        value: formatPnl(change.pnl),
-        sub: `${isPos ? '+' : ''}${change.percent.toFixed(2)}%`,
-        color: isPos ? 'text-profit' : 'text-loss',
-      });
-    } else {
-      items.push({ label, value: '--' });
-    }
+  for (const [k, label] of [['1h', '1小时'], ['4h', '4小时'], ['24h', '24小时'], ['1w', '1周']] as const) {
+    const c = m.changes[k];
+    items.push(c
+      ? { label, value: fmtSigned(c.pnl, { decimals: false }), sub: fmtPct(c.percent), tone: c.pnl >= 0 ? 'up' : 'down' }
+      : { label, value: '—' });
   }
 
   return (
-    <div className="bg-bg-card border border-border-card rounded-xl px-5 py-3">
-      <div className="flex items-start justify-between gap-6 overflow-x-auto">
-        {items.map((item) => (
-          <MetricCard key={item.label} {...item} />
-        ))}
-      </div>
+    <div className="card grid grid-cols-3 md:grid-cols-6 divide-x divide-border-card overflow-hidden">
+      {items.map((it) => {
+        const color = it.tone === 'up' ? 'text-profit' : it.tone === 'down' ? 'text-loss' : 'text-text-primary';
+        return (
+          <div key={it.label} className="px-4 py-3 min-w-0">
+            <div className="text-[11.5px] text-text-muted">{it.label}</div>
+            <div className={`num text-[15px] font-semibold mt-0.5 truncate ${color}`}>{it.value}</div>
+            {it.sub && <div className={`num text-[11px] opacity-70 ${color}`}>{it.sub}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }

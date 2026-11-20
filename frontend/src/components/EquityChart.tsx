@@ -29,8 +29,8 @@ export function EquityChart() {
   const seriesRef = useRef<ISeriesApi<'Area'> | null>(null);
 
   const isPositive = (history?.pnl ?? 0) >= 0;
-  const lineColor = isPositive ? '#00ff88' : '#ff4455';
-  const topColor = isPositive ? 'rgba(0,255,136,0.15)' : 'rgba(255,68,85,0.15)';
+  const lineColor = isPositive ? '#2ecc8f' : '#f2545b';
+  const topColor = isPositive ? 'rgba(46,204,143,0.18)' : 'rgba(242,84,91,0.18)';
   const bottomColor = 'rgba(0,0,0,0)';
 
   // Create chart once
@@ -40,24 +40,24 @@ export function EquityChart() {
     const chart = createChart(containerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: '#71717a',
-        fontFamily: "'JetBrains Mono', monospace",
+        textColor: '#5d6475',
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: 'rgba(30,30,46,0.5)' },
-        horzLines: { color: 'rgba(30,30,46,0.5)' },
+        vertLines: { visible: false },
+        horzLines: { color: 'rgba(29,34,45,0.7)' },
       },
       crosshair: {
-        vertLine: { color: 'rgba(99,102,241,0.4)', width: 1, labelBackgroundColor: '#1e1e2e' },
-        horzLine: { color: 'rgba(99,102,241,0.4)', width: 1, labelBackgroundColor: '#1e1e2e' },
+        vertLine: { color: 'rgba(139,156,255,0.35)', width: 1, labelBackgroundColor: '#1d222d' },
+        horzLine: { color: 'rgba(139,156,255,0.35)', width: 1, labelBackgroundColor: '#1d222d' },
       },
       rightPriceScale: {
-        borderColor: 'rgba(30,30,46,0.5)',
+        borderVisible: false,
         scaleMargins: { top: 0.1, bottom: 0.05 },
       },
       timeScale: {
-        borderColor: 'rgba(30,30,46,0.5)',
+        borderVisible: false,
         timeVisible: true,
         secondsVisible: false,
       },
@@ -119,87 +119,45 @@ export function EquityChart() {
   }, [history, lineColor, topColor, bottomColor]);
 
   return (
-    <div className="bg-bg-card border border-border-card rounded-xl overflow-hidden relative">
-      {/* Chart header */}
-      <div className="flex items-center justify-between px-5 pt-4 pb-2">
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-text-secondary uppercase tracking-wider font-semibold">
-            {selectedAccount
-              ? accounts?.find((a) => a.accountId === selectedAccount)?.label ?? selectedAccount
-              : 'Portfolio Value'}
-          </span>
+    <section className="card overflow-hidden relative">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4 pb-1">
+        <div className="flex items-baseline gap-3 min-w-0">
+          <h2 className="section-title">
+            {selectedAccount ? accounts?.find((a) => a.accountId === selectedAccount)?.label ?? selectedAccount : '资产走势'}
+          </h2>
           {history && history.points.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className={`text-sm font-bold tabular-nums ${isPositive ? 'text-profit' : 'text-loss'}`}>
-                {isPositive ? '+' : ''}{formatUSD(history.pnl)}
-              </span>
-              <span className={`text-xs tabular-nums px-1.5 py-0.5 rounded ${isPositive ? 'bg-profit/10 text-profit' : 'bg-loss/10 text-loss'}`}>
-                {isPositive ? '+' : ''}{history.pnlPercent.toFixed(2)}%
-              </span>
-            </div>
+            <span className={`num text-[13px] font-medium ${isPositive ? 'text-profit' : 'text-loss'}`}>
+              {isPositive ? '+' : ''}{formatUSD(history.pnl)}
+              <span className="ml-1.5 opacity-75">{isPositive ? '+' : ''}{history.pnlPercent.toFixed(2)}%</span>
+            </span>
           )}
         </div>
-        <div className="flex items-center gap-3">
-          {/* Account filter */}
+        <div className="flex items-center gap-2 flex-wrap">
           {accounts && accounts.length > 1 && (
-            <div className="flex gap-1">
-              <button
-                onClick={() => setSelectedAccount(undefined)}
-                className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all ${
-                  !selectedAccount
-                    ? 'bg-accent/15 text-accent'
-                    : 'text-text-muted hover:text-text-secondary hover:bg-bg-card-hover'
-                }`}
-              >
-                All
-              </button>
-              {accounts.map((acc) => (
-                <button
-                  key={acc.accountId}
-                  onClick={() => setSelectedAccount(acc.accountId)}
-                  className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all ${
-                    selectedAccount === acc.accountId
-                      ? 'bg-accent/15 text-accent'
-                      : 'text-text-muted hover:text-text-secondary hover:bg-bg-card-hover'
-                  }`}
-                >
-                  {acc.label}
-                </button>
-              ))}
-            </div>
+            <select
+              value={selectedAccount ?? ''}
+              onChange={(e) => setSelectedAccount(e.target.value || undefined)}
+              className="text-[12px] bg-bg-inset border border-border-card rounded-lg px-2.5 py-1 text-text-secondary outline-none focus:border-border-hover"
+            >
+              <option value="">全部账户</option>
+              {accounts.map((acc) => <option key={acc.accountId} value={acc.accountId}>{acc.label}</option>)}
+            </select>
           )}
-          {/* Separator */}
-          {accounts && accounts.length > 1 && (
-            <div className="w-px h-4 bg-border-card" />
-          )}
-          {/* Period filter */}
-          <div className="flex gap-1">
+          <div className="seg">
             {PERIODS.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setPeriod(key)}
-                className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all ${
-                  period === key
-                    ? 'bg-accent/15 text-accent'
-                    : 'text-text-muted hover:text-text-secondary hover:bg-bg-card-hover'
-                }`}
-              >
-                {label}
-              </button>
+              <button key={key} data-active={period === key} onClick={() => setPeriod(key)}>{label}</button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Chart container */}
-      <div ref={containerRef} className="w-full h-[300px]" />
+      <div ref={containerRef} className="w-full h-[260px]" />
 
-      {/* No data overlay */}
       {(!history || history.points.length === 0) && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-text-muted text-sm">Collecting data...</span>
+          <span className="text-text-muted text-sm">正在采集数据…</span>
         </div>
       )}
-    </div>
+    </section>
   );
 }

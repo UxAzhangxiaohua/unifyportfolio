@@ -1,203 +1,118 @@
-import { useState, useMemo } from 'react';
-import type { AccountSnapshot, ExchangeType } from '../types';
+import { useMemo, useState } from 'react';
+import type { AccountSnapshot, ExchangeType, Position } from '../types';
+import { EXCHANGES } from '../lib/exchanges';
+import { fmtCompact, fmtPct, fmtPrice, fmtQty, fmtSigned, fmtUSD, pnlClass } from '../lib/format';
+import { CardHeader, EmptyState, ExchangeTag, Segmented, SideBadge } from './ui';
 
-const EXCHANGE_NAMES: Record<ExchangeType, string> = {
-  ibkr: 'IBKR',
-  hyperliquid: 'HL',
-  binance: 'Binance',
-  okx: 'OKX',
-};
+type Row = Position & { accountLabel: string; exchange: ExchangeType; accountId: string };
+type SortKey = 'value' | 'pnl' | 'symbol' | 'liq';
 
-function formatNum(n: number, decimals = 2): string {
-  if (n === 0) return '-';
-  return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+export function flatten(accounts: AccountSnapshot[], pred: (p: Position) => boolean): Row[] {
+  return accounts.flatMap((a) =>
+    a.positions.filter(pred).map((p) => ({ ...p, accountLabel: a.label, exchange: a.exchange, accountId: a.accountId })),
+  );
 }
 
-function formatUSD(n: number): string {
-  if (n === 0) return '-';
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
-}
-
-function formatPnl(n: number): string {
-  if (n === 0) return '-';
-  return (n >= 0 ? '+' : '') + formatUSD(n);
-}
-
-type SortKey = 'exchange' | 'symbol' | 'side' | 'value' | 'pnl' | 'leverage';
-
-interface FlatPosition {
-  symbol: string;
-  side: 'long' | 'short' | 'flat';
-  quantity: number;
-  avgPrice: number;
-  currentPrice: number;
-  unrealizedPnl: number;
-  marketValue: number;
-  leverage: number | null;
-  liquidationPrice: number | null;
-  assetClass: string;
-  accountLabel: string;
-  exchange: ExchangeType;
+/** Distance from mark to liquidation, as % of mark (always positive = room left) */
+function liqDistance(p: Position): number | null {
+  if (!p.liquidationPrice || !p.currentPrice) return null;
+  const d = p.side === 'long'
+    ? (p.currentPrice - p.liquidationPrice) / p.currentPrice
+    : (p.liquidationPrice - p.currentPrice) / p.currentPrice;
+  return d * 100;
 }
 
 export function PositionsTable({ accounts }: { accounts: AccountSnapshot[] }) {
-  const [sortKey, setSortKey] = useState<SortKey>('value');
-  const [sortAsc, setSortAsc] = useState(false);
-  const [filterExchange, setFilterExchange] = useState<ExchangeType | 'all'>('all');
+  const [ex, setEx] = useState<ExchangeType | 'all'>('all');
+  const [sort, setSort] = useState<{ k: SortKey; asc: boolean }>({ k: 'value', asc: false });
 
-  const allPositions: FlatPosition[] = useMemo(() => {
-    return accounts.flatMap((a) =>
-      a.positions.map((p) => ({
-        ...p,
-        accountLabel: a.label,
-        exchange: a.exchange,
-      }))
-    );
-  }, [accounts]);
+  const all = useMemo(() => flatten(accounts, (p) => p.assetClass === 'crypto-perp' || p.assetClass === 'crypto-future'), [accounts]);
+  const exchanges = [...new Set(all.map((p) => p.exchange))];
 
-  const filtered = useMemo(() => {
-    if (filterExchange === 'all') return allPositions;
-    return allPositions.filter(p => p.exchange === filterExchange);
-  }, [allPositions, filterExchange]);
-
-  const sorted = useMemo(() => {
-    const arr = [...filtered];
-    const dir = sortAsc ? 1 : -1;
-    arr.sort((a, b) => {
-      switch (sortKey) {
-        case 'exchange': return dir * a.exchange.localeCompare(b.exchange);
+  const rows = useMemo(() => {
+    const r = ex === 'all' ? all : all.filter((p) => p.exchange === ex);
+    const dir = sort.asc ? 1 : -1;
+    return [...r].sort((a, b) => {
+      switch (sort.k) {
         case 'symbol': return dir * a.symbol.localeCompare(b.symbol);
-        case 'side': return dir * a.side.localeCompare(b.side);
-        case 'value': return dir * (a.marketValue - b.marketValue);
         case 'pnl': return dir * (a.unrealizedPnl - b.unrealizedPnl);
-        case 'leverage': return dir * ((a.leverage ?? 0) - (b.leverage ?? 0));
-        default: return 0;
+        case 'liq': return dir * ((liqDistance(a) ?? 1e9) - (liqDistance(b) ?? 1e9));
+        default: return dir * (a.marketValue - b.marketValue);
       }
     });
-    return arr;
-  }, [filtered, sortKey, sortAsc]);
+  }, [all, ex, sort]);
 
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) setSortAsc(!sortAsc);
-    else { setSortKey(key); setSortAsc(false); }
-  };
+  const upl = rows.reduce((s, p) => s + p.unrealizedPnl, 0);
+  const notional = rows.reduce((s, p) => s + p.marketValue, 0);
 
-  const exchanges = [...new Set(allPositions.map(p => p.exchange))];
-  if (allPositions.length === 0) return null;
-
-  const SortHeader = ({ label, k, right }: { label: string; k: SortKey; right?: boolean }) => (
-    <th
-      className={`p-3 font-medium cursor-pointer hover:text-text-primary transition-colors select-none ${right ? 'text-right' : 'text-left'}`}
-      onClick={() => handleSort(k)}
-    >
-      <span className="inline-flex items-center gap-1">
-        {label}
-        {sortKey === k && (
-          <span className="text-accent">{sortAsc ? '\u2191' : '\u2193'}</span>
-        )}
-      </span>
+  const Th = ({ k, children, r }: { k: SortKey; children: string; r?: boolean }) => (
+    <th className={`cursor-pointer select-none hover:text-text-secondary ${r ? 'r' : ''}`}
+      onClick={() => setSort((s) => ({ k, asc: s.k === k ? !s.asc : k === 'liq' || k === 'symbol' }))}>
+      {children}{sort.k === k && <span className="text-accent ml-1">{sort.asc ? '↑' : '↓'}</span>}
     </th>
   );
 
   return (
-    <div className="bg-bg-card border border-border-card rounded-xl overflow-hidden">
-      <div className="p-4 border-b border-border-card flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-          Positions
-          <span className="ml-2 text-text-muted font-normal">{filtered.length}</span>
-        </h3>
-        <div className="flex gap-1">
-          <button
-            className={`text-[10px] px-2.5 py-1 rounded-md font-medium transition-all ${
-              filterExchange === 'all' ? 'bg-accent/15 text-accent' : 'text-text-muted hover:text-text-secondary'
-            }`}
-            onClick={() => setFilterExchange('all')}
-          >
-            ALL
-          </button>
-          {exchanges.map(ex => (
-            <button
-              key={ex}
-              className={`text-[10px] px-2.5 py-1 rounded-md font-medium transition-all ${
-                filterExchange === ex ? 'bg-accent/15 text-accent' : 'text-text-muted hover:text-text-secondary'
-              }`}
-              onClick={() => setFilterExchange(ex)}
-            >
-              {EXCHANGE_NAMES[ex]}
-            </button>
-          ))}
+    <section className="card overflow-hidden">
+      <CardHeader
+        title="合约持仓"
+        sub={all.length ? <>{rows.length} 个 · 名义 <span className="num">{fmtCompact(notional)}</span> · 盈亏 <span className={`num ${pnlClass(upl)}`}>{fmtSigned(upl)}</span></> : undefined}
+        right={exchanges.length > 1 && (
+          <Segmented value={ex} onChange={setEx}
+            options={[{ value: 'all' as const, label: '全部' }, ...exchanges.map((e) => ({ value: e, label: EXCHANGES[e].name }))]} />
+        )}
+      />
+      {rows.length === 0 ? <EmptyState>当前没有永续 / 交割合约持仓</EmptyState> : (
+        <div className="overflow-x-auto">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>账户</th>
+                <Th k="symbol">合约</Th>
+                <th>方向</th>
+                <th className="r">数量</th>
+                <th className="r">开仓价</th>
+                <th className="r">标记价</th>
+                <Th k="value" r>名义价值</Th>
+                <Th k="pnl" r>未实现盈亏</Th>
+                <th className="r">杠杆</th>
+                <Th k="liq" r>强平价 / 距离</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p, i) => {
+                const roe = p.avgPrice > 0 ? ((p.currentPrice - p.avgPrice) / p.avgPrice) * 100 * (p.side === 'short' ? -1 : 1) : 0;
+                const dist = liqDistance(p);
+                return (
+                  <tr key={`${p.accountId}-${p.symbol}-${i}`}>
+                    <td className="max-w-[160px]"><ExchangeTag exchange={p.exchange} label={p.accountLabel} /></td>
+                    <td>
+                      <span className="font-semibold">{p.symbol}</span>
+                      {p.assetClass === 'crypto-future' && <span className="chip ml-2 !text-[10px] !py-0">交割</span>}
+                    </td>
+                    <td><SideBadge side={p.side} /></td>
+                    <td className="r num">{fmtQty(p.quantity)}</td>
+                    <td className="r num text-text-secondary">{fmtPrice(p.avgPrice)}</td>
+                    <td className="r num">{fmtPrice(p.currentPrice)}</td>
+                    <td className="r num">{fmtUSD(p.marketValue, { decimals: false })}</td>
+                    <td className="r">
+                      <div className={`num font-medium ${pnlClass(p.unrealizedPnl)}`}>{fmtSigned(p.unrealizedPnl)}</div>
+                      {roe !== 0 && <div className={`num text-[11px] opacity-70 ${pnlClass(roe)}`}>{fmtPct(roe)}</div>}
+                    </td>
+                    <td className="r num text-text-secondary">{p.leverage ? `${p.leverage}×` : '—'}</td>
+                    <td className="r">
+                      <div className="num text-text-secondary">{p.liquidationPrice ? fmtPrice(p.liquidationPrice) : '—'}</div>
+                      {dist != null && (
+                        <div className={`num text-[11px] ${dist < 10 ? 'text-loss' : dist < 25 ? 'text-delayed' : 'text-text-muted'}`}>{dist.toFixed(1)}%</div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-text-muted text-[10px] uppercase tracking-wider">
-              <SortHeader label="Exchange" k="exchange" />
-              <SortHeader label="Symbol" k="symbol" />
-              <SortHeader label="Side" k="side" />
-              <th className="p-3 text-right font-medium">Size</th>
-              <th className="p-3 text-right font-medium">Entry</th>
-              <th className="p-3 text-right font-medium">Mark</th>
-              <SortHeader label="PnL" k="pnl" right />
-              <SortHeader label="Value" k="value" right />
-              <SortHeader label="Lev" k="leverage" right />
-              <th className="p-3 text-right font-medium">Liq Price</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((p, i) => {
-              const pnlPct = p.avgPrice > 0 && p.quantity > 0
-                ? ((p.currentPrice - p.avgPrice) / p.avgPrice * 100 * (p.side === 'short' ? -1 : 1))
-                : 0;
-
-              return (
-                <tr
-                  key={`${p.exchange}-${p.symbol}-${i}`}
-                  className="border-t border-border-card hover:bg-bg-card-hover transition-colors"
-                >
-                  <td className="p-3 text-text-muted text-xs">{EXCHANGE_NAMES[p.exchange]}</td>
-                  <td className="p-3 font-semibold">{p.symbol}</td>
-                  <td className="p-3">
-                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                      p.side === 'long' ? 'bg-profit/10 text-profit' :
-                      p.side === 'short' ? 'bg-loss/10 text-loss' :
-                      'text-text-secondary'
-                    }`}>
-                      {p.side.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="p-3 text-right tabular-nums">{formatNum(p.quantity, p.quantity < 1 ? 4 : 2)}</td>
-                  <td className="p-3 text-right tabular-nums text-text-secondary">{formatNum(p.avgPrice)}</td>
-                  <td className="p-3 text-right tabular-nums">{formatNum(p.currentPrice)}</td>
-                  <td className="p-3 text-right">
-                    <div className={`tabular-nums font-medium ${
-                      p.unrealizedPnl > 0 ? 'text-profit' :
-                      p.unrealizedPnl < 0 ? 'text-loss' :
-                      'text-text-secondary'
-                    }`}>
-                      {formatPnl(p.unrealizedPnl)}
-                    </div>
-                    {pnlPct !== 0 && (
-                      <div className={`text-[10px] tabular-nums ${
-                        pnlPct > 0 ? 'text-profit/70' : 'text-loss/70'
-                      }`}>
-                        {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
-                      </div>
-                    )}
-                  </td>
-                  <td className="p-3 text-right tabular-nums text-text-secondary">{formatUSD(p.marketValue)}</td>
-                  <td className="p-3 text-right tabular-nums text-text-secondary">
-                    {p.leverage ? `${p.leverage}x` : '-'}
-                  </td>
-                  <td className="p-3 text-right tabular-nums text-text-muted">
-                    {p.liquidationPrice ? formatNum(p.liquidationPrice) : '-'}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      )}
+    </section>
   );
 }

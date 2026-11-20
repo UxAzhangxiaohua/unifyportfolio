@@ -54,11 +54,11 @@ export class IBKRConnector extends BaseConnector {
       throw new Error(`Unexpected IBKR response: ${text.substring(0, 200)}`);
     }
 
-    if (response.Status === 'Success' || response.Status === 'Warn') {
-      return response.ReferenceCode;
+    if ((response.Status === 'Success' || response.Status === 'Warn') && response.ReferenceCode) {
+      return String(response.ReferenceCode);
     }
 
-    throw new Error(`IBKR SendRequest failed: ${response.ErrorMessage || response.Status}`);
+    throw new Error(`IBKR SendRequest failed (${response.ErrorCode ?? response.Status}): ${response.ErrorMessage || response.Status}`);
   }
 
   private async pollForStatement(referenceCode: string): Promise<string> {
@@ -126,7 +126,20 @@ export class IBKRConnector extends BaseConnector {
           const assetCategory = (op['@_assetCategory'] || op.assetCategory || '').toUpperCase();
 
           let assetClass: Position['assetClass'];
-          if (assetCategory === 'STK') {
+          let option: Position['option'];
+          if (assetCategory === 'OPT' || assetCategory === 'FOP') {
+            assetClass = 'option';
+            const pc = String(op['@_putCall'] || '').toUpperCase();
+            const exp = String(op['@_expiry'] || '');
+            option = {
+              underlying: op['@_underlyingSymbol'] || String(op['@_symbol'] || '').split(' ')[0],
+              type: pc === 'P' || pc === 'PUT' ? 'put' : 'call',
+              strike: parseFloat(op['@_strike'] || '0'),
+              expiry: /^\d{8}$/.test(exp) ? `${exp.slice(0, 4)}-${exp.slice(4, 6)}-${exp.slice(6, 8)}` : exp,
+            };
+          } else if (assetCategory === 'FUT') {
+            assetClass = 'crypto-future';
+          } else if (assetCategory === 'STK') {
             assetClass = 'stock';
           } else if (assetCategory === 'ETF' || (op['@_description'] || '').includes('ETF')) {
             assetClass = 'etf';
@@ -145,6 +158,7 @@ export class IBKRConnector extends BaseConnector {
             leverage: null,
             liquidationPrice: null,
             assetClass,
+            option,
           });
 
           totalUnrealizedPnl += fifoPnl;
@@ -179,6 +193,7 @@ export class IBKRConnector extends BaseConnector {
       marginUsed: null,
       marginRatio: null,
       positions,
+      stables: [],
       fetchedAt: new Date().toISOString(),
       isDelayed: true, // Flex Query data is always delayed
     };

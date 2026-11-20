@@ -5,13 +5,15 @@ import type { AppConfig, ExchangeType, AccountConfig } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const VALID_EXCHANGES: ExchangeType[] = ['ibkr', 'binance', 'okx', 'hyperliquid'];
+const VALID_EXCHANGES: ExchangeType[] = ['ibkr', 'binance', 'okx', 'hyperliquid', 'bybit', 'bitget'];
 
 const REQUIRED_CREDENTIAL_FIELDS: Record<ExchangeType, string[]> = {
   ibkr: ['flexQueryId', 'flexToken'],
   binance: ['apiKey', 'apiSecret'],
   okx: ['apiKey', 'apiSecret', 'passphrase'],
   hyperliquid: ['walletAddress'],
+  bybit: ['apiKey', 'apiSecret'],
+  bitget: ['apiKey', 'apiSecret', 'passphrase'],
 };
 
 function validateAccount(account: unknown, index: number): AccountConfig {
@@ -67,7 +69,28 @@ export function loadConfig(): AppConfig {
     throw new Error('Config must have a non-empty "accounts" array');
   }
 
-  const accounts = parsed.accounts.map((a, i) => validateAccount(a, i));
+  // Skip accounts whose credentials are still placeholders (e.g. "YOUR_API_KEY")
+  const isPlaceholder = (a: Record<string, unknown>) =>
+    Object.values((a.credentials ?? {}) as Record<string, unknown>).some(
+      (v) => typeof v === 'string' && (v.trim() === '' || v.startsWith('YOUR_') || v.startsWith('0xYOUR_')),
+    );
+  const accounts = (parsed.accounts as Record<string, unknown>[])
+    .filter((a) => {
+      if (a.enabled === false) {
+        console.log(`  - skipping ${String(a.id)}: disabled ("enabled": false)`);
+        return false;
+      }
+      if (isPlaceholder(a)) {
+        console.log(`  - skipping ${String(a.id)}: credentials not filled in`);
+        return false;
+      }
+      return true;
+    })
+    .map((a, i) => validateAccount(a, i));
+
+  if (accounts.length === 0) {
+    throw new Error('No accounts with filled-in credentials');
+  }
 
   // Check for duplicate IDs
   const ids = new Set<string>();

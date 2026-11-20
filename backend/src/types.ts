@@ -1,8 +1,30 @@
 // === Exchange types ===
 
-export type ExchangeType = 'ibkr' | 'binance' | 'okx' | 'hyperliquid';
+export type ExchangeType = 'ibkr' | 'binance' | 'okx' | 'hyperliquid' | 'bybit' | 'bitget';
 
-export type AssetClass = 'stock' | 'etf' | 'crypto-spot' | 'crypto-perp' | 'crypto-future';
+export type AssetClass = 'stock' | 'etf' | 'crypto-spot' | 'crypto-perp' | 'crypto-future' | 'option';
+
+/** Where a stablecoin balance sits inside an exchange account */
+export type StableLocation = 'trading' | 'funding' | 'earn';
+
+export interface StableBalance {
+  asset: 'USDT' | 'USDC';
+  location: StableLocation;
+  amount: number;
+  /** Optional detail, e.g. "Simple Earn Flexible", "Futures wallet" */
+  source?: string;
+}
+
+export interface OptionDetails {
+  underlying: string;
+  type: 'call' | 'put';
+  strike: number;
+  /** ISO date (YYYY-MM-DD) */
+  expiry: string;
+  delta?: number | null;
+  /** Set when premium/prices are quoted in a coin (e.g. BTC) rather than USD */
+  premiumCcy?: string;
+}
 
 // === Config types (loaded from accounts.json) ===
 
@@ -22,6 +44,17 @@ export interface OKXCredentials {
   passphrase: string;
 }
 
+export interface BybitCredentials {
+  apiKey: string;
+  apiSecret: string;
+}
+
+export interface BitgetCredentials {
+  apiKey: string;
+  apiSecret: string;
+  passphrase: string;
+}
+
 export interface HyperliquidCredentials {
   walletAddress: string;
 }
@@ -30,6 +63,8 @@ export type AccountCredentials =
   | IBKRCredentials
   | BinanceCredentials
   | OKXCredentials
+  | BybitCredentials
+  | BitgetCredentials
   | HyperliquidCredentials;
 
 export interface AccountConfig {
@@ -37,6 +72,8 @@ export interface AccountConfig {
   exchange: ExchangeType;
   label: string;
   credentials: AccountCredentials;
+  /** Set to false to temporarily disable an account without deleting its credentials */
+  enabled?: boolean;
 }
 
 export interface AppConfig {
@@ -58,6 +95,8 @@ export interface Position {
   leverage: number | null;
   liquidationPrice: number | null;
   assetClass: AssetClass;
+  /** Present when assetClass === 'option' */
+  option?: OptionDetails;
 }
 
 export interface AccountSnapshot {
@@ -70,9 +109,14 @@ export interface AccountSnapshot {
   marginUsed: number | null;
   marginRatio: number | null;
   positions: Position[];
+  /** USDT/USDC balances across trading, funding and earn wallets */
+  stables: StableBalance[];
   fetchedAt: string;
   isDelayed: boolean;
+  /** Last fetch failed; data shown is from the last successful fetch (if any) */
   error?: string;
+  /** Non-fatal problems, e.g. earn endpoint not permitted for this API key */
+  warnings?: string[];
 }
 
 export interface PortfolioResponse {

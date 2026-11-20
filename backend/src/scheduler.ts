@@ -4,6 +4,8 @@ import { HyperliquidConnector } from './connectors/hyperliquid.js';
 import { BinanceConnector } from './connectors/binance.js';
 import { OKXConnector } from './connectors/okx.js';
 import { IBKRConnector } from './connectors/ibkr.js';
+import { BybitConnector } from './connectors/bybit.js';
+import { BitgetConnector } from './connectors/bitget.js';
 import { cacheSet } from './cache.js';
 
 function createConnector(account: AccountConfig): BaseConnector {
@@ -12,6 +14,8 @@ function createConnector(account: AccountConfig): BaseConnector {
     case 'binance': return new BinanceConnector(account);
     case 'okx': return new OKXConnector(account);
     case 'ibkr': return new IBKRConnector(account);
+    case 'bybit': return new BybitConnector(account);
+    case 'bitget': return new BitgetConnector(account);
     default: throw new Error(`Unknown exchange: ${account.exchange}`);
   }
 }

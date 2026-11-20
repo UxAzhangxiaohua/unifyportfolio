@@ -1,6 +1,24 @@
-export type ExchangeType = 'ibkr' | 'binance' | 'okx' | 'hyperliquid';
+export type ExchangeType = 'ibkr' | 'binance' | 'okx' | 'hyperliquid' | 'bybit' | 'bitget';
 
-export type AssetClass = 'stock' | 'etf' | 'crypto-spot' | 'crypto-perp' | 'crypto-future';
+export type AssetClass = 'stock' | 'etf' | 'crypto-spot' | 'crypto-perp' | 'crypto-future' | 'option';
+
+export type StableLocation = 'trading' | 'funding' | 'earn';
+
+export interface StableBalance {
+  asset: 'USDT' | 'USDC';
+  location: StableLocation;
+  amount: number;
+  source?: string;
+}
+
+export interface OptionDetails {
+  underlying: string;
+  type: 'call' | 'put';
+  strike: number;
+  expiry: string;
+  delta?: number | null;
+  premiumCcy?: string;
+}
 
 export interface Position {
   symbol: string;
@@ -13,6 +31,7 @@ export interface Position {
   leverage: number | null;
   liquidationPrice: number | null;
   assetClass: AssetClass;
+  option?: OptionDetails;
 }
 
 export interface AccountSnapshot {
@@ -25,9 +44,11 @@ export interface AccountSnapshot {
   marginUsed: number | null;
   marginRatio: number | null;
   positions: Position[];
+  stables: StableBalance[];
   fetchedAt: string;
   isDelayed: boolean;
   error?: string;
+  warnings?: string[];
 }
 
 export interface PortfolioResponse {

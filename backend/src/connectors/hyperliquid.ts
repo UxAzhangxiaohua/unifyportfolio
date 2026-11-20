@@ -1,5 +1,5 @@
-import { BaseConnector } from './base.js';
-import type { AccountConfig, AccountSnapshot, HyperliquidCredentials, Position } from '../types.js';
+import { BaseConnector, num, optional } from './base.js';
+import type { AccountConfig, AccountSnapshot, HyperliquidCredentials, Position, StableBalance } from '../types.js';
 
 const API_URL = 'https://api.hyperliquid.xyz/info';
 
@@ -37,7 +37,14 @@ interface HLSpotBalance {
 
 interface HLSpotState {
   balances: HLSpotBalance[];
+  /** Only present for unified / portfolio-margin accounts, where spot USDC backs perps */
+  tokenToAvailableAfterMaintenance?: unknown;
 }
+
+interface HLVaultEquity { vaultAddress: string; equity: string }
+
+// USDT0 is Hyperliquid's bridged USDT
+const HL_STABLES: Record<string, 'USDT' | 'USDC'> = { USDC: 'USDC', USDT0: 'USDT', USDT: 'USDT' };
 
 export class HyperliquidConnector extends BaseConnector {
   private address: string;
@@ -48,79 +55,90 @@ export class HyperliquidConnector extends BaseConnector {
   }
 
   async fetch(): Promise<AccountSnapshot> {
+    const warnings: string[] = [];
     try {
-      const [perpState, spotState] = await Promise.all([
+      const [perpState, spotState, vaults] = await Promise.all([
         this.fetchPerps(),
         this.fetchSpot(),
+        optional('Vaults', warnings, () => this.info<HLVaultEquity[]>('userVaultEquities'), []),
       ]);
 
       const positions: Position[] = [];
-
-      // Perp positions
       for (const ap of perpState.assetPositions) {
         const p = ap.position;
-        const size = parseFloat(p.szi);
+        const size = num(p.szi);
         if (size === 0) continue;
-
         positions.push({
           symbol: p.coin,
           side: size > 0 ? 'long' : 'short',
           quantity: Math.abs(size),
-          avgPrice: parseFloat(p.entryPx),
-          currentPrice: parseFloat(p.positionValue) / Math.abs(size),
-          unrealizedPnl: parseFloat(p.unrealizedPnl),
-          marketValue: Math.abs(parseFloat(p.positionValue)),
+          avgPrice: num(p.entryPx),
+          currentPrice: num(p.positionValue) / Math.abs(size),
+          unrealizedPnl: num(p.unrealizedPnl),
+          marketValue: Math.abs(num(p.positionValue)),
           leverage: p.leverage.value,
-          liquidationPrice: p.liquidationPx ? parseFloat(p.liquidationPx) : null,
+          liquidationPrice: p.liquidationPx ? num(p.liquidationPx) : null,
           assetClass: 'crypto-perp',
         });
       }
 
-      // Spot balances (only include non-zero, non-USDC)
-      for (const bal of spotState.balances) {
-        const total = parseFloat(bal.total);
-        if (total === 0 || bal.coin === 'USDC') continue;
+      const unified = spotState.tokenToAvailableAfterMaintenance !== undefined;
+      const perpValue = num(perpState.marginSummary.accountValue);
+      const stables: StableBalance[] = [];
 
-        positions.push({
-          symbol: bal.coin,
-          side: 'long',
-          quantity: total,
-          avgPrice: parseFloat(bal.entryNtl) / total || 0,
-          currentPrice: 0, // Spot doesn't return mark price directly
-          unrealizedPnl: 0,
-          marketValue: total, // Will be approximate
-          leverage: null,
-          liquidationPrice: null,
-          assetClass: 'crypto-spot',
-        });
+      for (const bal of spotState.balances) {
+        const asset = HL_STABLES[bal.coin];
+        const total = num(bal.total);
+        if (asset && Math.abs(total) >= 0.01) {
+          stables.push({ asset, location: unified ? 'trading' : 'funding', amount: total, source: unified ? 'Unified account' : 'Spot' });
+        }
+      }
+      // Standard (non-unified) accounts keep perp collateral separately from spot.
+      // accountValue includes uPnL, so record collateral as accountValue - uPnL.
+      const perpUpl = positions.reduce((s, p) => s + p.unrealizedPnl, 0);
+      if (!unified && Math.abs(perpValue - perpUpl) >= 0.01) {
+        stables.push({ asset: 'USDC', location: 'trading', amount: perpValue - perpUpl, source: 'Perp margin' });
+      }
+      for (const v of vaults) {
+        const eq = num(v.equity);
+        if (eq >= 0.01) stables.push({ asset: 'USDC', location: 'earn', amount: eq, source: `Vault ${v.vaultAddress.slice(0, 6)}…` });
       }
 
-      const marginUsed = parseFloat(perpState.marginSummary.totalMarginUsed);
-      const totalUnrealizedPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
-
-      // For unified accounts, spot USDC total is the source of truth for
-      // account balance across both spot and perps (per Hyperliquid docs)
-      const usdcBalance = spotState.balances.find(b => b.coin === 'USDC');
-      const equity = usdcBalance ? parseFloat(usdcBalance.total) : 0;
+      const marginUsed = num(perpState.marginSummary.totalMarginUsed);
+      const stableTotal = stables.reduce((s, b) => s + b.amount, 0);
+      const equity = stableTotal + perpUpl;
+      const tradingEquity = stables.filter((b) => b.location === 'trading').reduce((s, b) => s + b.amount, 0) + perpUpl;
 
       return {
         accountId: this.account.id,
         exchange: 'hyperliquid',
         label: this.account.label,
         equity,
-        availableBalance: equity - marginUsed,
-        unrealizedPnl: totalUnrealizedPnl,
+        availableBalance: num((perpState as { withdrawable?: string }).withdrawable) || Math.max(tradingEquity - marginUsed, 0),
+        unrealizedPnl: perpUpl,
         marginUsed,
-        marginRatio: equity > 0 ? marginUsed / equity : null,
+        marginRatio: tradingEquity > 0 ? marginUsed / tradingEquity : null,
         positions,
+        stables,
         fetchedAt: new Date().toISOString(),
         isDelayed: false,
+        warnings: warnings.length ? warnings : undefined,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[hyperliquid] ${this.account.id}: ${msg}`);
       return this.makeErrorSnapshot(msg);
     }
+  }
+
+  private async info<T>(type: string): Promise<T> {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, user: this.address }),
+    });
+    if (!res.ok) throw new Error(`${type} ${res.status}: ${(await res.text()).substring(0, 200)}`);
+    return res.json() as Promise<T>;
   }
 
   private async fetchPerps(): Promise<HLClearinghouseState> {

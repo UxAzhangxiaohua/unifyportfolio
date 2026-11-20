@@ -12,11 +12,26 @@ const TTL: Record<string, number> = {
   ibkr: 600_000,       // 10 min
   binance: 120_000,    // 2 min
   okx: 120_000,
+  bybit: 120_000,
+  bitget: 120_000,
   hyperliquid: 120_000,
 };
 
 export function cacheSet(snapshot: AccountSnapshot): void {
   const ttl = TTL[snapshot.exchange] ?? 120_000;
+  const prev = store.get(snapshot.accountId);
+
+  if (snapshot.error) {
+    // Keep showing the last good data with the error attached, and don't extend freshness.
+    // Also skip trade tracking: an empty error snapshot would look like every position closed.
+    if (prev) {
+      prev.snapshot = { ...prev.snapshot, error: snapshot.error };
+    } else {
+      store.set(snapshot.accountId, { snapshot, expiresAt: 0 });
+    }
+    return;
+  }
+
   store.set(snapshot.accountId, {
     snapshot,
     expiresAt: Date.now() + ttl,

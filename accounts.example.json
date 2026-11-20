@@ -9,7 +9,8 @@
       "credentials": {
         "flexQueryId": "YOUR_FLEX_QUERY_ID",
         "flexToken": "YOUR_FLEX_TOKEN"
-      }
+      },
+      "enabled": false
     },
     {
       "id": "binance-main",
@@ -36,6 +37,25 @@
       "label": "Hyperliquid Main",
       "credentials": {
         "walletAddress": "0xYOUR_WALLET_ADDRESS"
+      }
+    },
+    {
+      "id": "bybit-main",
+      "exchange": "bybit",
+      "label": "Bybit Main",
+      "credentials": {
+        "apiKey": "YOUR_API_KEY",
+        "apiSecret": "YOUR_API_SECRET"
+      }
+    },
+    {
+      "id": "bitget-main",
+      "exchange": "bitget",
+      "label": "Bitget Main",
+      "credentials": {
+        "apiKey": "YOUR_API_KEY",
+        "apiSecret": "YOUR_API_SECRET",
+        "passphrase": "YOUR_PASSPHRASE"
       }
     }
   ]
