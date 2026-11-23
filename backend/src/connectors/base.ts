@@ -1,9 +1,46 @@
-import type { AccountConfig, AccountSnapshot } from '../types.js';
+import type { AccountConfig, AccountSnapshot, FundFlow, Position } from '../types.js';
+
+/** How long a failed sub-request may be served from its last good result */
+const STICKY_MAX_AGE_MS = 15 * 60_000;
 
 export abstract class BaseConnector {
   constructor(protected account: AccountConfig) {}
 
   abstract fetch(): Promise<AccountSnapshot>;
+
+  /**
+   * Stablecoin deposits/withdrawals since `sinceMs` (null = venue not supported).
+   * Called alongside fetch() so a balance change and its withdrawal record are observed together.
+   */
+  async fetchFlows(_sinceMs: number): Promise<FundFlow[] | null> {
+    return null;
+  }
+
+  private stickyCache = new Map<string, { value: unknown; at: number }>();
+
+  /**
+   * Like optional(), but when the sub-request fails and it succeeded within the last 15 min,
+   * serve that last good result (with a warning) instead of the fallback. A transient failure
+   * of e.g. the earn or positions endpoint then doesn't make equity dip or positions look closed.
+   * `label` must be unique per call site within the connector.
+   */
+  protected async sticky<T>(label: string, warnings: string[], fn: () => Promise<T>, fallback: T, quiet = false): Promise<T> {
+    try {
+      const value = await fn();
+      this.stickyCache.set(label, { value, at: Date.now() });
+      return value;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const prev = this.stickyCache.get(label);
+      if (prev && Date.now() - prev.at < STICKY_MAX_AGE_MS) {
+        warnings.push(`${label}: using data from ${Math.round((Date.now() - prev.at) / 1000)}s ago — ${msg}`.substring(0, 300));
+        return prev.value as T;
+      }
+      // quiet: product often simply not enabled for the account (e.g. options) — don't nag
+      if (!quiet) warnings.push(`${label}: ${msg}`.substring(0, 300));
+      return fallback;
+    }
+  }
 
   protected makeErrorSnapshot(error: string): AccountSnapshot {
     return {
@@ -64,6 +101,12 @@ export function parseOptionSymbol(symbol: string): { underlying: string; type: '
   return { underlying: parts[0], type: cp === 'C' ? 'call' : 'put', strike, expiry };
 }
 
+/** Map a venue coin name to a tracked stablecoin (USDT0 = Hyperliquid's bridged USDT) */
+export const stableCoin = (c: string): 'USDT' | 'USDC' | null =>
+  c === 'USDT' || c === 'USDT0' ? 'USDT' : c === 'USDC' ? 'USDC' : null;
+
+export const lower = (s: unknown): string | null => (typeof s === 'string' && s.trim() ? s.trim().toLowerCase() : null);
+
 export const num = (s: unknown): number => {
   const n = typeof s === 'number' ? s : parseFloat(String(s ?? ''));
   return Number.isFinite(n) ? n : 0;
@@ -73,4 +116,27 @@ export function createConnector(account: AccountConfig): BaseConnector {
   // Dynamic import would create circular deps, so we use a registry pattern.
   // This is populated by the scheduler after importing all connectors.
   throw new Error(`No connector registered for exchange: ${account.exchange}`);
+}
+
+/** Funding quote for one perp: rate per interval (positive = longs pay shorts) */
+export interface FundingQuote { rate: number; nextTime: number | null; intervalH: number | null }
+
+const quoteCache = new Map<string, { at: number; value: unknown }>();
+/** Short-lived cache for public market data shared across accounts (funding rates move slowly) */
+export async function cachedPublic<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const hit = quoteCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.value as T;
+  const value = await fn();
+  quoteCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/** Attach the funding quote and the estimated next payment (+ receive / − pay) to a perp position */
+export function applyFunding(p: Position, q: FundingQuote | undefined): void {
+  if (!q || !Number.isFinite(q.rate)) return;
+  p.fundingRate = q.rate;
+  p.fundingIntervalH = q.intervalH;
+  p.nextFundingTime = q.nextTime;
+  const sign = p.side === 'long' ? 1 : p.side === 'short' ? -1 : 0;
+  p.nextFunding = -sign * p.marketValue * q.rate;
 }

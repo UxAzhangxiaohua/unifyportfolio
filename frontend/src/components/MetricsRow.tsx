@@ -1,5 +1,6 @@
 import { useMetrics } from '../hooks/usePortfolio';
 import { fmtPct, fmtSigned } from '../lib/format';
+import { tr } from '../lib/i18n';
 
 export function MetricsRow() {
   const { data: m } = useMetrics();
@@ -12,12 +13,12 @@ export function MetricsRow() {
     tone: m.sharpeRatio == null ? undefined : m.sharpeRatio >= 0 ? 'up' : 'down',
   });
   items.push({
-    label: '最大回撤',
+    label: tr('最大回撤', 'Max drawdown'),
     value: m.maxDrawdown > 0 ? fmtPct(-m.maxDrawdownPercent) : '—',
     sub: m.maxDrawdown > 0 ? fmtSigned(-m.maxDrawdown, { decimals: false }) : undefined,
     tone: m.maxDrawdown > 0 ? 'down' : undefined,
   });
-  for (const [k, label] of [['1h', '1小时'], ['4h', '4小时'], ['24h', '24小时'], ['1w', '1周']] as const) {
+  for (const [k, label] of [['1h', tr('1小时', '1h')], ['4h', tr('4小时', '4h')], ['24h', tr('24小时', '24h')], ['1w', tr('1周', '1w')]] as const) {
     const c = m.changes[k];
     items.push(c
       ? { label, value: fmtSigned(c.pnl, { decimals: false }), sub: fmtPct(c.percent), tone: c.pnl >= 0 ? 'up' : 'down' }

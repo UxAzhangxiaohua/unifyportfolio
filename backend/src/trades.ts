@@ -1,4 +1,4 @@
-import type { AccountSnapshot, ClosedTrade, ExchangeType } from './types.js';
+import type { AccountSnapshot, ClosedTrade, ExchangeType, Position } from './types.js';
 
 interface TrackedPosition {
   accountId: string;
@@ -8,6 +8,8 @@ interface TrackedPosition {
   quantity: number;
   avgPrice: number;
   lastPrice: number;
+  /** PnL per (Δprice × quantity): 1 for coins/shares; contract size for CFD lots */
+  mult: number;
   firstSeen: string;
 }
 
@@ -24,15 +26,35 @@ function addTrade(trade: ClosedTrade): void {
   if (trades.length > MAX_TRADES) trades.pop();
 }
 
+/**
+ * One entry per account + symbol + side: MT5 (hedging) accounts can hold several orders on the
+ * same symbol and side; tracked separately they would overwrite each other every cycle.
+ * Merged = Σ quantity, quantity-weighted avg entry, Σ notional.
+ */
+function aggregate(positions: Position[]): Array<Position & { side: 'long' | 'short'; mult: number }> {
+  const groups = new Map<string, Position[]>();
+  for (const p of positions) {
+    if (p.side === 'flat' || p.quantity === 0) continue;
+    const k = `${p.symbol}:${p.side}`;
+    groups.set(k, [...(groups.get(k) ?? []), p]);
+  }
+  return [...groups.values()].map((g) => {
+    const quantity = g.reduce((s, p) => s + p.quantity, 0);
+    const avgPrice = quantity > 0 ? g.reduce((s, p) => s + p.avgPrice * p.quantity, 0) / quantity : g[0].avgPrice;
+    const marketValue = g.reduce((s, p) => s + p.marketValue, 0);
+    // CFD quantity is in lots: derive units per lot from notional (USD) ÷ (lots × price)
+    const m = g[0].assetClass === 'cfd' && quantity > 0 && g[0].currentPrice > 0 ? marketValue / (quantity * g[0].currentPrice) : 1;
+    return { ...g[0], side: g[0].side as 'long' | 'short', quantity, avgPrice, marketValue, mult: Number.isFinite(m) && m > 0 ? m : 1 };
+  });
+}
+
 export function trackSnapshot(snapshot: AccountSnapshot): void {
   if (snapshot.error) return;
 
   const now = new Date().toISOString();
   const currentKeys = new Set<string>();
 
-  for (const pos of snapshot.positions) {
-    if (pos.side === 'flat' || pos.quantity === 0) continue;
-
+  for (const pos of aggregate(snapshot.positions)) {
     const key = posKey(snapshot.accountId, pos.symbol, pos.side);
     currentKeys.add(key);
 
@@ -47,6 +69,7 @@ export function trackSnapshot(snapshot: AccountSnapshot): void {
         quantity: pos.quantity,
         avgPrice: pos.avgPrice,
         lastPrice: pos.currentPrice,
+        mult: pos.mult,
         firstSeen: now,
       });
     } else if (pos.quantity < existing.quantity) {
@@ -56,7 +79,7 @@ export function trackSnapshot(snapshot: AccountSnapshot): void {
         pos.side === 'long'
           ? pos.currentPrice - existing.avgPrice
           : existing.avgPrice - pos.currentPrice;
-      const realizedPnl = priceDiff * closedQty;
+      const realizedPnl = priceDiff * closedQty * existing.mult;
       const pnlPercent = existing.avgPrice !== 0 ? (priceDiff / existing.avgPrice) * 100 : 0;
       const durationSeconds = Math.floor((Date.now() - new Date(existing.firstSeen).getTime()) / 1000);
 
@@ -79,10 +102,12 @@ export function trackSnapshot(snapshot: AccountSnapshot): void {
       existing.quantity = pos.quantity;
       existing.avgPrice = pos.avgPrice;
       existing.lastPrice = pos.currentPrice;
+      existing.mult = pos.mult;
     } else {
       existing.quantity = pos.quantity;
       existing.avgPrice = pos.avgPrice;
       existing.lastPrice = pos.currentPrice;
+      existing.mult = pos.mult;
     }
   }
 
@@ -93,7 +118,7 @@ export function trackSnapshot(snapshot: AccountSnapshot): void {
 
     const priceDiff =
       tp.side === 'long' ? tp.lastPrice - tp.avgPrice : tp.avgPrice - tp.lastPrice;
-    const realizedPnl = priceDiff * tp.quantity;
+    const realizedPnl = priceDiff * tp.quantity * tp.mult;
     const pnlPercent = tp.avgPrice !== 0 ? (priceDiff / tp.avgPrice) * 100 : 0;
     const durationSeconds = Math.floor((Date.now() - new Date(tp.firstSeen).getTime()) / 1000);
 

@@ -1,5 +1,5 @@
-import { BaseConnector, num, optional } from './base.js';
-import type { AccountConfig, AccountSnapshot, HyperliquidCredentials, Position, StableBalance } from '../types.js';
+import { applyFunding, BaseConnector, cachedPublic, lower, num, stableCoin, type FundingQuote } from './base.js';
+import type { AccountConfig, AccountSnapshot, FundFlow, HyperliquidCredentials, Position, StableBalance } from '../types.js';
 
 const API_URL = 'https://api.hyperliquid.xyz/info';
 
@@ -19,6 +19,9 @@ interface HLAssetPosition {
     unrealizedPnl: string;
     leverage: { type: string; value: number };
     liquidationPx: string | null;
+    marginUsed?: string;
+    /** Funding *paid* by the user (positive = paid) */
+    cumFunding?: { allTime: string; sinceOpen: string; sinceChange: string };
   };
 }
 
@@ -43,6 +46,12 @@ interface HLSpotState {
 
 interface HLVaultEquity { vaultAddress: string; equity: string }
 
+interface HLLedgerUpdate {
+  time: number;
+  hash: string;
+  delta: { type: string; usdc?: string; fee?: string; token?: string; amount?: string; usdcValue?: string; user?: string; destination?: string; nonce?: number };
+}
+
 // USDT0 is Hyperliquid's bridged USDT
 const HL_STABLES: Record<string, 'USDT' | 'USDC'> = { USDC: 'USDC', USDT0: 'USDT', USDT: 'USDT' };
 
@@ -60,7 +69,7 @@ export class HyperliquidConnector extends BaseConnector {
       const [perpState, spotState, vaults] = await Promise.all([
         this.fetchPerps(),
         this.fetchSpot(),
-        optional('Vaults', warnings, () => this.info<HLVaultEquity[]>('userVaultEquities'), []),
+        this.sticky('Vaults', warnings, () => this.info<HLVaultEquity[]>('userVaultEquities'), []),
       ]);
 
       const positions: Position[] = [];
@@ -78,8 +87,15 @@ export class HyperliquidConnector extends BaseConnector {
           marketValue: Math.abs(num(p.positionValue)),
           leverage: p.leverage.value,
           liquidationPrice: p.liquidationPx ? num(p.liquidationPx) : null,
+          margin: num(p.marginUsed) || null,
+          // HL reports funding paid as positive; we use + received / − paid
+          fundingPnl: p.cumFunding ? -num(p.cumFunding.sinceOpen) : null,
           assetClass: 'crypto-perp',
         });
+      }
+      if (positions.length) {
+        const quotes = await this.sticky('Funding rates', warnings, () => this.fundingQuotes(), new Map<string, FundingQuote>(), true);
+        for (const p of positions) applyFunding(p, quotes.get(p.symbol));
       }
 
       const unified = spotState.tokenToAvailableAfterMaintenance !== undefined;
@@ -131,6 +147,41 @@ export class HyperliquidConnector extends BaseConnector {
     }
   }
 
+  /**
+   * Bridge deposits/withdrawals plus stablecoin sends to/from other addresses. Moves inside this
+   * address (perp↔spot, vaults, staking) stay within the tracked equity and are ignored.
+   * A withdrawal lands at this same address on Arbitrum, hence `address` = own address.
+   */
+  async fetchFlows(sinceMs: number): Promise<FundFlow[]> {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'userNonFundingLedgerUpdates', user: this.address, startTime: sinceMs }),
+    });
+    if (!res.ok) throw new Error(`ledger ${res.status}: ${(await res.text()).substring(0, 200)}`);
+    const rows = (await res.json()) as HLLedgerUpdate[];
+    const self = this.address.toLowerCase();
+    const flows: FundFlow[] = [];
+    for (const r of rows) {
+      const d = r.delta;
+      const id = `${r.time}:${d.type}:${r.hash}`;
+      const base = { txId: null, network: 'Hyperliquid', time: r.time, doneTime: r.time, status: 'done' as const };
+      if (d.type === 'deposit') {
+        flows.push({ ...base, id: `in:${id}`, direction: 'in', coin: 'USDC', amount: num(d.usdc), fee: 0, address: self });
+      } else if (d.type === 'withdraw') {
+        flows.push({ ...base, id: `out:${id}`, direction: 'out', coin: 'USDC', amount: num(d.usdc) - num(d.fee), fee: num(d.fee), address: self, network: 'Arbitrum' });
+      } else if (d.type === 'send' || d.type === 'spotTransfer' || d.type === 'internalTransfer') {
+        const coin = d.type === 'internalTransfer' ? 'USDC' : stableCoin(d.token ?? '');
+        const from = lower(d.user), to = lower(d.destination);
+        if (!coin || from === to) continue;
+        const amount = d.type === 'internalTransfer' ? num(d.usdc) : num(d.amount);
+        if (from === self) flows.push({ ...base, id: `out:${id}`, direction: 'out', coin, amount, fee: num(d.fee), address: to });
+        else if (to === self) flows.push({ ...base, id: `in:${id}`, direction: 'in', coin, amount, fee: 0, address: self });
+      }
+    }
+    return flows;
+  }
+
   private async info<T>(type: string): Promise<T> {
     const res = await fetch(API_URL, {
       method: 'POST',
@@ -139,6 +190,19 @@ export class HyperliquidConnector extends BaseConnector {
     });
     if (!res.ok) throw new Error(`${type} ${res.status}: ${(await res.text()).substring(0, 200)}`);
     return res.json() as Promise<T>;
+  }
+
+  /** Main-dex funding rates (hourly settlement on the hour) */
+  private async fundingQuotes(): Promise<Map<string, FundingQuote>> {
+    const [meta, ctxs] = await cachedPublic('hl:metaAndAssetCtxs', 60_000, async () => {
+      const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'metaAndAssetCtxs' }) });
+      if (!res.ok) throw new Error(`metaAndAssetCtxs ${res.status}`);
+      return res.json() as Promise<[{ universe: Array<{ name: string }> }, Array<{ funding: string }>]>;
+    });
+    const nextHour = Math.ceil(Date.now() / 3_600_000) * 3_600_000;
+    const out = new Map<string, FundingQuote>();
+    meta.universe.forEach((u, i) => { if (ctxs[i]) out.set(u.name, { rate: num(ctxs[i].funding), nextTime: nextHour, intervalH: 1 }); });
+    return out;
   }
 
   private async fetchPerps(): Promise<HLClearinghouseState> {

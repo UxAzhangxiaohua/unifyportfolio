@@ -1,13 +1,39 @@
+import { useEffect, useState } from 'react';
 import type { AccountSnapshot } from '../types';
 import { EXCHANGES } from '../lib/exchanges';
 import { fmtCompact, fmtSigned, fmtUSD, pnlClass, timeAgo } from '../lib/format';
 import { StatusDot } from './ui';
+import { tr } from '../lib/i18n';
+
+const SMALL_USD = 10;
+const FOLD_KEY = 'unify.foldSmallAccounts';
 
 export function AccountsGrid({ accounts, total }: { accounts: AccountSnapshot[]; total: number }) {
+  const [fold, setFold] = useState(() => {
+    try { return localStorage.getItem(FOLD_KEY) !== '0'; } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem(FOLD_KEY, fold ? '1' : '0'); } catch { /* ignore */ } }, [fold]);
+
   const sorted = [...accounts].sort((a, b) => b.equity - a.equity);
+  // Accounts in error stay visible even when small: the error is what needs attention
+  const isSmall = (a: AccountSnapshot) => Math.abs(a.equity) < SMALL_USD && !a.error;
+  const small = sorted.filter(isSmall);
+  const shown = fold ? sorted.filter((a) => !isSmall(a)) : sorted;
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-3">
-      {sorted.map((a) => <AccountCard key={a.accountId} a={a} total={total} />)}
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-3">
+        {shown.map((a) => <AccountCard key={a.accountId} a={a} total={total} />)}
+      </div>
+      {small.length > 0 && (
+        <button type="button" onClick={() => setFold(!fold)}
+          className="self-start text-[12px] text-text-muted hover:text-text-secondary transition-colors">
+          {fold
+            ? <>▸ {tr(`显示 ${small.length} 个小于 $${SMALL_USD} 的账户`, `Show ${small.length} account(s) under $${SMALL_USD}`)}
+                <span className="num ml-1.5">({small.map((a) => EXCHANGES[a.exchange].short).join(' · ')}, {fmtUSD(small.reduce((s, a) => s + a.equity, 0))})</span></>
+            : <>▾ {tr(`折叠小于 $${SMALL_USD} 的账户`, `Fold accounts under $${SMALL_USD}`)}</>}
+        </button>
+      )}
     </div>
   );
 }
@@ -34,7 +60,7 @@ function AccountCard({ a, total }: { a: AccountSnapshot; total: number }) {
         <span className="inline-flex items-center gap-1.5 text-[11px] text-text-muted shrink-0"
           title={a.error ?? a.warnings?.join('\n') ?? ''}>
           <StatusDot status={status} />
-          {a.error ? '错误' : a.isDelayed ? '延迟' : timeAgo(a.fetchedAt)}
+          {a.error ? tr('错误', 'Error') : a.isDelayed ? tr('延迟', 'Delayed') : timeAgo(a.fetchedAt)}
         </span>
       </div>
 
@@ -49,11 +75,11 @@ function AccountCard({ a, total }: { a: AccountSnapshot; total: number }) {
       {a.exchange !== 'ibkr' && (
         <div className="grid grid-cols-2 gap-2 text-[12px]">
           <div className="rounded-lg bg-bg-inset px-2.5 py-2">
-            <div className="text-text-muted text-[11px]">稳定币</div>
+            <div className="text-text-muted text-[11px]">{tr('稳定币', 'Stables')}</div>
             <div className="num">{fmtCompact(stables)}</div>
           </div>
           <div className="rounded-lg bg-bg-inset px-2.5 py-2">
-            <div className="text-text-muted text-[11px]">理财</div>
+            <div className="text-text-muted text-[11px]">{tr('理财', 'Earn')}</div>
             <div className="num text-earn">{fmtCompact(earn)}</div>
           </div>
         </div>
@@ -62,7 +88,7 @@ function AccountCard({ a, total }: { a: AccountSnapshot; total: number }) {
       {mr != null && (
         <div>
           <div className="flex justify-between text-[11px] text-text-muted mb-1">
-            <span>保证金占用</span>
+            <span>{tr('保证金占用', 'Margin used')}</span>
             <span className="num">{(mr * 100).toFixed(1)}%</span>
           </div>
           <div className="h-1 bg-bg-inset rounded-full overflow-hidden">
@@ -75,8 +101,8 @@ function AccountCard({ a, total }: { a: AccountSnapshot; total: number }) {
       )}
 
       <div className="flex gap-3 text-[11.5px] text-text-muted mt-auto">
-        <span>合约 <span className="text-text-secondary">{perps}</span></span>
-        <span>期权 <span className="text-text-secondary">{opts}</span></span>
+        <span>{tr('合约', 'Perps')} <span className="text-text-secondary">{perps}</span></span>
+        <span>{tr('期权', 'Options')} <span className="text-text-secondary">{opts}</span></span>
         {a.warnings?.length ? <span className="text-delayed ml-auto" title={a.warnings.join('\n')}>⚠ {a.warnings.length}</span> : null}
       </div>
     </div>

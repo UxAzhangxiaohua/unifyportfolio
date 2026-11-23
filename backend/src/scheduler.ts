@@ -6,7 +6,10 @@ import { OKXConnector } from './connectors/okx.js';
 import { IBKRConnector } from './connectors/ibkr.js';
 import { BybitConnector } from './connectors/bybit.js';
 import { BitgetConnector } from './connectors/bitget.js';
+import { MT5Connector } from './connectors/mt5.js';
 import { cacheSet } from './cache.js';
+import { checkMarginAlerts, initAlerts } from './alerts.js';
+import { transfersObserve, transfersSince } from './transfers.js';
 
 function createConnector(account: AccountConfig): BaseConnector {
   switch (account.exchange) {
@@ -16,44 +19,67 @@ function createConnector(account: AccountConfig): BaseConnector {
     case 'ibkr': return new IBKRConnector(account);
     case 'bybit': return new BybitConnector(account);
     case 'bitget': return new BitgetConnector(account);
+    case 'mt5': return new MT5Connector(account);
     default: throw new Error(`Unknown exchange: ${account.exchange}`);
   }
 }
 
-async function fetchAndCache(connector: BaseConnector): Promise<void> {
-  const snapshot = await connector.fetch();
+const flowErrors = new Map<string, string>();
+
+async function fetchAndCache(connector: BaseConnector, accountId: string): Promise<void> {
+  // Balances and deposit/withdrawal records are fetched together so a debit and its withdrawal
+  // record are observed in the same cycle (see transfers.ts)
+  const [snapshot, flows] = await Promise.all([
+    connector.fetch(),
+    connector.fetchFlows(transfersSince(accountId)).then(
+      (f) => { flowErrors.delete(accountId); return f; },
+      (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (flowErrors.get(accountId) !== msg) console.error(`[transfers] ${accountId}: ${msg}`);
+        flowErrors.set(accountId, msg);
+        return null;
+      }),
+  ]);
+  if (flows && !snapshot.error) transfersObserve(accountId, flows);
+  const flowErr = flowErrors.get(accountId);
+  if (flowErr && !snapshot.error) {
+    snapshot.warnings = [...(snapshot.warnings ?? []), `Deposit/withdrawal history: ${flowErr}`.substring(0, 300)];
+  }
   cacheSet(snapshot);
+  checkMarginAlerts(snapshot);
 }
 
 export function startScheduler(config: AppConfig): void {
+  initAlerts(config.alerts);
   const connectors = config.accounts.map((a) => ({
     connector: createConnector(a),
     exchange: a.exchange,
+    id: a.id,
   }));
 
   // Group by exchange for staggered scheduling
-  const grouped = new Map<ExchangeType, BaseConnector[]>();
-  for (const { connector, exchange } of connectors) {
+  const grouped = new Map<ExchangeType, Array<{ connector: BaseConnector; id: string }>>();
+  for (const { connector, exchange, id } of connectors) {
     const list = grouped.get(exchange) ?? [];
-    list.push(connector);
+    list.push({ connector, id });
     grouped.set(exchange, list);
   }
 
   for (const [exchange, group] of grouped) {
-    const intervalMs = exchange === 'ibkr'
-      ? config.ibkrPollIntervalSeconds * 1000
-      : config.pollIntervalSeconds * 1000;
+    const intervalMs = (exchange === 'ibkr' ? config.ibkrPollIntervalSeconds
+      : exchange === 'mt5' ? config.mt5PollIntervalSeconds
+      : config.pollIntervalSeconds) * 1000;
 
     // Stagger accounts within the same exchange by 2 seconds
-    group.forEach((connector, i) => {
+    group.forEach(({ connector, id }, i) => {
       const staggerMs = i * 2000;
 
       // Initial fetch (staggered)
       setTimeout(() => {
-        fetchAndCache(connector);
+        fetchAndCache(connector, id);
 
         // Then repeat at interval
-        setInterval(() => fetchAndCache(connector), intervalMs);
+        setInterval(() => fetchAndCache(connector, id), intervalMs);
       }, staggerMs);
     });
 

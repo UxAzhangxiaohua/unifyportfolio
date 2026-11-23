@@ -5,8 +5,10 @@ services:
       - "8189:8189"
     volumes:
       - ./accounts.json:/app/accounts.json:ro
+      - ./data:/app/data
     environment:
       - CONFIG_PATH=/app/accounts.json
+      - HISTORY_DB=/app/data/history.db
       - BACKEND_PORT=8189
     restart: unless-stopped
 

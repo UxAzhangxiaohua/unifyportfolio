@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 const usd0 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -45,10 +46,10 @@ export function pnlClass(n: number): string {
 
 export function timeAgo(iso: string): string {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 60) return `${s}秒前`;
-  if (s < 3600) return `${Math.floor(s / 60)}分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)}小时前`;
-  return `${Math.floor(s / 86400)}天前`;
+  if (s < 60) return tr(`${s}秒前`, `${s}s ago`);
+  if (s < 3600) return tr(`${Math.floor(s / 60)}分钟前`, `${Math.floor(s / 60)}m ago`);
+  if (s < 86400) return tr(`${Math.floor(s / 3600)}小时前`, `${Math.floor(s / 3600)}h ago`);
+  return tr(`${Math.floor(s / 86400)}天前`, `${Math.floor(s / 86400)}d ago`);
 }
 
 /** Days to expiry (can be fractional / negative) — options expire 08:00 UTC on crypto venues */

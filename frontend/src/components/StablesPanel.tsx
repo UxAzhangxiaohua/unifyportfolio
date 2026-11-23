@@ -1,10 +1,16 @@
 import { Fragment, useState } from 'react';
 import type { AccountSnapshot, StableBalance, StableLocation } from '../types';
-import { LOCATION_LABEL } from '../lib/exchanges';
+import { locationLabel } from '../lib/exchanges';
 import { fmtUSD } from '../lib/format';
 import { CardHeader, EmptyState, ExchangeTag } from './ui';
+import { tr } from '../lib/i18n';
 
 const LOCS: StableLocation[] = ['trading', 'funding', 'earn'];
+const LOC_COLOR: Record<StableLocation, string> = {
+  trading: 'var(--color-loc-trading)',
+  funding: 'var(--color-loc-funding)',
+  earn: 'var(--color-loc-earn)',
+};
 
 interface Row {
   account: AccountSnapshot;
@@ -40,29 +46,29 @@ export function StablesPanel({ accounts }: { accounts: AccountSnapshot[] }) {
 
   return (
     <section className="card overflow-hidden">
-      <CardHeader title="稳定币持仓" sub="USDT / USDC · 交易 + 资金 + 理财" right={
+      <CardHeader title={tr('稳定币持仓', 'Stablecoins')} sub={tr('USDT / USDC · 交易 + 资金 + 理财', 'USDT / USDC · trading + funding + earn')} right={
         <div className="flex gap-3 text-[12px] text-text-secondary">
           {LOCS.map((l) => (
             <span key={l} className="inline-flex items-center gap-1.5">
-              <i className={`w-2 h-2 rounded-sm ${l === 'trading' ? 'bg-accent' : l === 'funding' ? 'bg-text-muted' : 'bg-earn'}`} />
-              {LOCATION_LABEL[l]}
+              <i className="w-2 h-2 rounded-sm" style={{ backgroundColor: LOC_COLOR[l] }} />
+              {locationLabel(l)}
             </span>
           ))}
         </div>
       } />
-      {rows.length === 0 ? <EmptyState>暂无加密账户</EmptyState> : (
+      {rows.length === 0 ? <EmptyState>{tr('暂无加密账户', 'No crypto accounts')}</EmptyState> : (
         <div className="overflow-x-auto">
           <table className="data">
             <thead>
               <tr>
-                <th>账户</th>
+                <th>{tr('账户', 'Account')}</th>
                 <th className="r">USDT</th>
                 <th className="r">USDC</th>
-                <th className="r">交易账户</th>
-                <th className="r">资金账户</th>
-                <th className="r">理财</th>
-                <th className="r">合计</th>
-                <th className="w-[22%] min-w-[140px]">分布</th>
+                <th className="r">{tr('交易账户', 'Trading')}</th>
+                <th className="r">{tr('资金账户', 'Funding')}</th>
+                <th className="r">{tr('理财', 'Earn')}</th>
+                <th className="r">{tr('合计', 'Total')}</th>
+                <th className="w-[22%] min-w-[140px]">{tr('分布', 'Breakdown')}</th>
               </tr>
             </thead>
             <tbody>
@@ -77,7 +83,7 @@ export function StablesPanel({ accounts }: { accounts: AccountSnapshot[] }) {
                           <span className={`text-text-muted text-[10px] transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
                           <ExchangeTag exchange={r.account.exchange} label={r.account.label} />
                           {r.account.warnings?.length ? (
-                            <span className="text-delayed text-[11px]" title={r.account.warnings.join('\n')}>部分数据缺失</span>
+                            <span className="text-delayed text-[11px]" title={r.account.warnings.join('\n')}>{tr('部分数据缺失', 'Partial data')}</span>
                           ) : null}
                         </span>
                       </td>
@@ -93,11 +99,11 @@ export function StablesPanel({ accounts }: { accounts: AccountSnapshot[] }) {
                       <tr>
                         <td colSpan={8} className="!py-0 !px-0 bg-bg-inset/60">
                           <div className="px-12 py-3 grid gap-1.5 text-[12.5px]">
-                            {(r.account.stables ?? []).length === 0 && <span className="text-text-muted">无稳定币余额</span>}
+                            {(r.account.stables ?? []).length === 0 && <span className="text-text-muted">{tr('无稳定币余额', 'No stablecoin balance')}</span>}
                             {[...(r.account.stables ?? [])].sort((a, b) => b.amount - a.amount).map((s, i) => (
                               <div key={i} className="flex items-center gap-3">
                                 <span className={`w-12 text-[11px] font-medium ${s.asset === 'USDT' ? 'text-usdt' : 'text-usdc'}`}>{s.asset}</span>
-                                <span className="w-20 text-text-muted">{LOCATION_LABEL[s.location]}</span>
+                                <span className="w-20 text-text-muted">{locationLabel(s.location)}</span>
                                 <span className="flex-1 text-text-secondary">{s.source}</span>
                                 <span className="num">{fmtUSD(s.amount)}</span>
                               </div>
@@ -113,7 +119,7 @@ export function StablesPanel({ accounts }: { accounts: AccountSnapshot[] }) {
             </tbody>
             <tfoot>
               <tr className="border-t border-border-hover">
-                <td className="!pl-5 py-3 text-[12px] text-text-secondary font-medium">合计</td>
+                <td className="!pl-5 py-3 text-[12px] text-text-secondary font-medium">{tr('合计', 'Total')}</td>
                 <Cell v={tot.usdt} cls="font-semibold text-usdt" />
                 <Cell v={tot.usdc} cls="font-semibold text-usdc" />
                 <Cell v={tot.byLoc.trading} cls="font-medium" />
@@ -133,12 +139,11 @@ export function StablesPanel({ accounts }: { accounts: AccountSnapshot[] }) {
 function LocBar({ byLoc }: { byLoc: Record<StableLocation, number> }) {
   const total = LOCS.reduce((s, l) => s + Math.max(byLoc[l], 0), 0);
   if (total <= 0) return <div className="h-1.5 rounded-full bg-bg-inset" />;
-  const color = { trading: 'var(--color-accent)', funding: 'var(--color-text-muted)', earn: 'var(--color-earn)' };
   return (
     <div className="h-1.5 rounded-full overflow-hidden flex gap-px bg-bg-inset"
-      title={LOCS.map((l) => `${LOCATION_LABEL[l]} ${((Math.max(byLoc[l], 0) / total) * 100).toFixed(0)}%`).join(' · ')}>
+      title={LOCS.map((l) => `${locationLabel(l)} ${((Math.max(byLoc[l], 0) / total) * 100).toFixed(0)}%`).join(' · ')}>
       {LOCS.map((l) => (
-        <div key={l} className="h-full" style={{ width: `${(Math.max(byLoc[l], 0) / total) * 100}%`, backgroundColor: color[l] }} />
+        <div key={l} className="h-full" style={{ width: `${(Math.max(byLoc[l], 0) / total) * 100}%`, backgroundColor: LOC_COLOR[l] }} />
       ))}
     </div>
   );

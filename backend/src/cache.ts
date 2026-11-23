@@ -15,6 +15,7 @@ const TTL: Record<string, number> = {
   bybit: 120_000,
   bitget: 120_000,
   hyperliquid: 120_000,
+  mt5: 300_000,        // 5 min (polled every 60s, fresh login each time)
 };
 
 export function cacheSet(snapshot: AccountSnapshot): void {

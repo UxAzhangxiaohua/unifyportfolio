@@ -5,3 +5,5 @@ accounts.json
 *.log
 .DS_Store
 logs/
+data/
+mt5bridge/bin/

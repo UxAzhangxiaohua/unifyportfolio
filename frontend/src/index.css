@@ -18,7 +18,11 @@
   --color-text-muted: #5d6475;
   --color-usdt: #26a17b;
   --color-usdc: #2775ca;
-  --color-earn: #b48cff;
+  --color-earn: #14a38b;
+  /* Stablecoin location identity (validated: dark surface, all pairs, CVD-safe) */
+  --color-loc-trading: #9085e9;
+  --color-loc-funding: #c98500;
+  --color-loc-earn: #14a38b;
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }

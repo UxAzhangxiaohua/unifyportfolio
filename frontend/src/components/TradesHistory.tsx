@@ -1,5 +1,6 @@
 import { useTrades } from '../hooks/usePortfolio';
 import { ExchangeTag, SideBadge, CardHeader, EmptyState } from './ui';
+import { tr, locale } from '../lib/i18n';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -39,26 +40,26 @@ export function TradesHistory() {
   return (
     <section className="card overflow-hidden">
       <CardHeader
-        title="已平仓记录"
-        sub={summary.totalTrades > 0 ? `${summary.totalTrades} 笔 · 根据持仓变化推断，重启后清空` : undefined}
+        title={tr('已平仓记录', 'Closed trades')}
+        sub={summary.totalTrades > 0 ? tr(`${summary.totalTrades} 笔 · 根据持仓变化推断，重启后清空`, `${summary.totalTrades} trades · inferred from position changes, reset on restart`) : undefined}
         right={summary.totalTrades > 0 && (
           <div className="flex items-center gap-4 text-[12px] text-text-muted">
-            <span>胜率 <span className={`num ${summary.winRate >= 50 ? 'text-profit' : 'text-loss'}`}>{summary.winRate.toFixed(1)}%</span></span>
-            <span>已实现 <span className={`num ${summary.totalRealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+            <span>{tr('胜率', 'Win rate')} <span className={`num ${summary.winRate >= 50 ? 'text-profit' : 'text-loss'}`}>{summary.winRate.toFixed(1)}%</span></span>
+            <span>{tr('已实现', 'Realized')} <span className={`num ${summary.totalRealizedPnl >= 0 ? 'text-profit' : 'text-loss'}`}>
               {summary.totalRealizedPnl >= 0 ? '+' : ''}{formatUSD(summary.totalRealizedPnl)}</span></span>
           </div>
         )}
       />
       {trades.length === 0 ? (
-        <EmptyState>暂无平仓记录 —— 持仓关闭后会出现在这里</EmptyState>
+        <EmptyState>{tr('暂无平仓记录 —— 持仓关闭后会出现在这里', 'No closed trades yet — they appear here once a position is closed')}</EmptyState>
       ) : (
         <div className="overflow-x-auto max-h-[420px]">
           <table className="data">
             <thead>
               <tr>
-                <th>时间</th><th>合约</th><th>交易所</th><th>方向</th>
-                <th className="r">开仓</th><th className="r">平仓</th><th className="r">数量</th>
-                <th className="r">盈亏</th><th className="r">持仓时长</th>
+                <th>{tr('时间', 'Time')}</th><th>{tr('合约', 'Contract')}</th><th>{tr('交易所', 'Exchange')}</th><th>{tr('方向', 'Side')}</th>
+                <th className="r">{tr('开仓', 'Entry')}</th><th className="r">{tr('平仓', 'Exit')}</th><th className="r">{tr('数量', 'Qty')}</th>
+                <th className="r">{tr('盈亏', 'PnL')}</th><th className="r">{tr('持仓时长', 'Duration')}</th>
               </tr>
             </thead>
             <tbody>
@@ -67,7 +68,7 @@ export function TradesHistory() {
                 return (
                   <tr key={t.id}>
                     <td className="num text-text-muted">
-                      {new Date(t.exitTime).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
+                      {new Date(t.exitTime).toLocaleString(locale(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
                     </td>
                     <td className="font-medium">{t.symbol}</td>
                     <td><ExchangeTag exchange={t.exchange} /></td>

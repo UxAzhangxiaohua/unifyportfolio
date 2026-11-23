@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { ExchangeType } from '../types';
 import { EXCHANGES } from '../lib/exchanges';
+import { tr } from '../lib/i18n';
 
 export function ExchangeTag({ exchange, label }: { exchange: ExchangeType; label?: string }) {
   const ex = EXCHANGES[exchange];
@@ -16,7 +17,7 @@ export function SideBadge({ side }: { side: 'long' | 'short' | 'flat' }) {
   const cls =
     side === 'long' ? 'bg-profit/12 text-profit' :
     side === 'short' ? 'bg-loss/12 text-loss' : 'bg-white/5 text-text-secondary';
-  const label = side === 'long' ? '多' : side === 'short' ? '空' : '—';
+  const label = side === 'long' ? tr('多', 'L') : side === 'short' ? tr('空', 'S') : '—';
   return <span className={`inline-flex items-center justify-center w-6 h-5 rounded text-[11px] font-semibold ${cls}`}>{label}</span>;
 }
 

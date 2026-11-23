@@ -6,9 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { startScheduler } from './scheduler.js';
 import { cacheGetAll, cacheGet, cacheGetHealth } from './cache.js';
-import { startHistorySampler, historyGet, historyAccounts, metricsGet } from './history.js';
+import { startHistorySampler, historyGet, historyAccounts, metricsGet, historyInit } from './history.js';
+import { historyDbClose } from './db.js';
 import { tradesGet } from './trades.js';
-import type { PortfolioResponse } from './types.js';
+import { transfersGet, transfersInit, transitAt } from './transfers.js';
+import type { HyperliquidCredentials, PortfolioResponse, TransfersResponse } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.BACKEND_PORT) || 8189;
@@ -28,8 +30,15 @@ if (process.env.MOCK === '1') {
 } else if (existsSync(configPath)) {
   try {
     const config = loadConfig();
+    // History store must be open before transfers load their records and the scheduler starts
+    await historyInit();
+    transfersInit({
+      // A Hyperliquid withdrawal lands at the same address on Arbitrum, so it's one of "our" addresses
+      ownAddresses: config.accounts.filter((a) => a.exchange === 'hyperliquid').map((a) => (a.credentials as HyperliquidCredentials).walletAddress),
+      labels: Object.fromEntries(config.accounts.map((a) => [a.id, a.label])),
+    });
     startScheduler(config);
-    startHistorySampler(() => cacheGetAll(), 30_000);
+    startHistorySampler(() => cacheGetAll(), 30_000, config.accounts.map((a) => a.id));
     configLoaded = true;
   } catch (err) {
     console.error('Failed to load config:', err instanceof Error ? err.message : err);
@@ -59,11 +68,13 @@ app.get('/api/portfolio', async (): Promise<PortfolioResponse> => {
   }
 
   const accounts = cacheGetAll();
-  const totalEquity = accounts.reduce((s, a) => s + a.equity, 0);
+  const inTransit = transitAt(Date.now());
+  const totalEquity = accounts.reduce((s, a) => s + a.equity, 0) + inTransit;
   const totalUnrealizedPnl = accounts.reduce((s, a) => s + a.unrealizedPnl, 0);
 
   return {
     totalEquity,
+    inTransit,
     totalUnrealizedPnl,
     accounts,
     timestamp: new Date().toISOString(),
@@ -91,6 +102,12 @@ app.get('/api/metrics', async () => {
 // Trade history
 app.get('/api/trades', async () => {
   return tradesGet();
+});
+
+// Deposits/withdrawals and internal transfers (last 14 days)
+app.get('/api/transfers', async (): Promise<TransfersResponse> => {
+  if (!configLoaded) return { inTransit: 0, transfers: [] };
+  return transfersGet();
 });
 
 // Single account
@@ -132,7 +149,7 @@ function getMockData(): PortfolioResponse {
         { symbol: 'BTCUSDT', side: 'long', quantity: 0.45, avgPrice: 91200, currentPrice: 94800, unrealizedPnl: 1620, marketValue: 42660, leverage: 5, liquidationPrice: 74100, assetClass: 'crypto-perp' },
         { symbol: 'SOLUSDT', side: 'short', quantity: 120, avgPrice: 182.4, currentPrice: 180.6, unrealizedPnl: 216, marketValue: 21672, leverage: 3, liquidationPrice: 236.5, assetClass: 'crypto-perp' },
         { symbol: 'BTC-261226-100000-C', side: 'long', quantity: 0.5, avgPrice: 2450, currentPrice: 2410, unrealizedPnl: -20, marketValue: 1205, leverage: null, liquidationPrice: null, assetClass: 'option',
-          option: { underlying: 'BTC', type: 'call', strike: 100000, expiry: '2026-12-26', delta: 0.38 } },
+          option: { underlying: 'BTC', type: 'call', strike: 100000, expiry: '2026-12-26', delta: 0.19, gamma: 0.0000045, theta: -38.5, vega: 52.1, iv: 0.52, underlyingPrice: 94800 } },
       ],
       fetchedAt: now, isDelayed: false,
     },
@@ -147,7 +164,7 @@ function getMockData(): PortfolioResponse {
       positions: [
         { symbol: 'ETH-USDT-SWAP', side: 'long', quantity: 8, avgPrice: 3420, currentPrice: 3371, unrealizedPnl: -392, marketValue: 26968, leverage: 10, liquidationPrice: 3080, assetClass: 'crypto-perp' },
         { symbol: 'ETH-USD-261227-3000-P', side: 'short', quantity: 2, avgPrice: 0.021, currentPrice: 0.024, unrealizedPnl: -20, marketValue: 6742, leverage: null, liquidationPrice: null, assetClass: 'option',
-          option: { underlying: 'ETH', type: 'put', strike: 3000, expiry: '2026-12-27', delta: 0.21, premiumCcy: 'ETH' } },
+          option: { underlying: 'ETH', type: 'put', strike: 3000, expiry: '2026-12-27', delta: 0.42, gamma: -0.0011, theta: 9.8, vega: -6.4, underlyingPrice: 3371, premiumCcy: 'ETH' } },
       ],
       fetchedAt: now, isDelayed: false,
     },
@@ -191,4 +208,8 @@ function getMockData(): PortfolioResponse {
     accounts,
     timestamp: now,
   };
+}
+
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(sig, () => { historyDbClose(); process.exit(0); });
 }

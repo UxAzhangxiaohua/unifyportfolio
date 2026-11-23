@@ -1,6 +1,15 @@
 {
   "pollIntervalSeconds": 30,
   "ibkrPollIntervalSeconds": 300,
+  "mt5PollIntervalSeconds": 60,
+  "alerts": {
+    "discordWebhook": "https://discord.com/api/webhooks/YOUR_WEBHOOK",
+    "marginLevels": [
+      150,
+      100,
+      80
+    ]
+  },
   "accounts": [
     {
       "id": "ibkr-main",
@@ -56,6 +65,16 @@
         "apiKey": "YOUR_API_KEY",
         "apiSecret": "YOUR_API_SECRET",
         "passphrase": "YOUR_PASSPHRASE"
+      }
+    },
+    {
+      "id": "mt5-main",
+      "exchange": "mt5",
+      "label": "MT5 CFD",
+      "credentials": {
+        "login": "YOUR_MT5_LOGIN",
+        "password": "YOUR_INVESTOR_PASSWORD",
+        "server": "YOUR_BROKER_SERVER"
       }
     }
   ]

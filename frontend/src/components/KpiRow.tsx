@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import type { AccountSnapshot, PortfolioResponse } from '../types';
 import { fmtCompact, fmtSigned, fmtUSD, pnlClass } from '../lib/format';
 import { EXCHANGES } from '../lib/exchanges';
+import { tr } from '../lib/i18n';
+import { sumExposure } from '../lib/exposure';
 
 function Tile({ label, value, foot, children }: { label: string; value: ReactNode; foot?: ReactNode; children?: ReactNode }) {
   return (
@@ -14,7 +16,7 @@ function Tile({ label, value, foot, children }: { label: string; value: ReactNod
   );
 }
 
-const isDeriv = (c: string) => c === 'crypto-perp' || c === 'crypto-future' || c === 'option';
+const isDeriv = (c: string) => c === 'crypto-perp' || c === 'crypto-future' || c === 'cfd' || c === 'option';
 
 export function KpiRow({ data }: { data: PortfolioResponse }) {
   const accounts = data.accounts;
@@ -25,18 +27,29 @@ export function KpiRow({ data }: { data: PortfolioResponse }) {
   const stableTotal = usdt + usdc;
 
   const derivs = accounts.flatMap((a) => a.positions.filter((p) => isDeriv(p.assetClass)));
-  const perps = derivs.filter((p) => p.assetClass !== 'option');
-  const longN = perps.filter((p) => p.side === 'long').reduce((s, p) => s + p.marketValue, 0);
-  const shortN = perps.filter((p) => p.side === 'short').reduce((s, p) => s + p.marketValue, 0);
-  const derivUpl = derivs.reduce((s, p) => s + p.unrealizedPnl, 0);
-  const optCount = derivs.length - perps.length;
+  // CFDs have their own panel: keep them out of the crypto perp exposure/count
+  const perps = derivs.filter((p) => p.assetClass === 'crypto-perp' || p.assetClass === 'crypto-future');
+  // Effective exposure: leveraged ETFs × factor, a short on an inverse ETF counts as long
+  const { long: longN, short: shortN } = sumExposure(perps);
+  // CFD floating PnL comes from the account-level figure (authoritative), not the parsed position rows
+  const cfdUpl = accounts.flatMap((a) => a.cfd ?? []).reduce((s, c) => s + c.floatingPnl, 0);
+  const derivUpl = derivs.filter((p) => p.assetClass !== 'cfd').reduce((s, p) => s + p.unrealizedPnl, 0) + cfdUpl;
+  const optCount = derivs.filter((p) => p.assetClass === 'option').length;
+  const cfdCount = derivs.length - perps.length - optCount;
+  const inTransit = data.inTransit ?? 0;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-      <Tile label="总资产" value={fmtUSD(data.totalEquity, { decimals: false })} foot={<AllocationMini accounts={accounts} total={data.totalEquity} />} />
+      <Tile label={tr('总资产', 'Total equity')} value={fmtUSD(data.totalEquity, { decimals: false })} foot={<AllocationMini accounts={accounts} total={data.totalEquity} />}>
+        {Math.abs(inTransit) >= 0.01 && (
+          <div className="text-[12px] text-delayed" title={tr('已从一个账户转出、尚未到账另一个账户的资金，已计入总资产', 'Withdrawn from one tracked account and not yet credited at another — included in the total')}>
+            {tr('含转账在途', 'Incl. in transit')} <span className="num">{fmtUSD(inTransit)}</span>
+          </div>
+        )}
+      </Tile>
 
-      <Tile label="稳定币总额 (USDT + USDC)" value={fmtUSD(stableTotal, { decimals: false })}
-        foot={<span>其中理财 <span className="num text-earn">{fmtCompact(earn)}</span>
+      <Tile label={tr('稳定币总额 (USDT + USDC)', 'Stablecoins (USDT + USDC)')} value={fmtUSD(stableTotal, { decimals: false })}
+        foot={<span>{tr('其中理财', 'In earn')} <span className="num text-earn">{fmtCompact(earn)}</span>
           {stableTotal > 0 && <span className="text-text-muted"> · {((earn / stableTotal) * 100).toFixed(0)}%</span>}</span>}>
         <SplitBar parts={[{ v: usdt, c: 'var(--color-usdt)' }, { v: usdc, c: 'var(--color-usdc)' }]} />
         <div className="flex gap-4 text-[12px]">
@@ -45,15 +58,15 @@ export function KpiRow({ data }: { data: PortfolioResponse }) {
         </div>
       </Tile>
 
-      <Tile label="衍生品未实现盈亏" value={<span className={pnlClass(derivUpl)}>{fmtSigned(derivUpl, { decimals: false })}</span>}
-        foot={<span>{perps.length} 个合约 · {optCount} 个期权</span>} />
+      <Tile label={tr('衍生品未实现盈亏', 'Derivatives uPnL')} value={<span className={pnlClass(derivUpl)}>{fmtSigned(derivUpl, { decimals: false })}</span>}
+        foot={<span>{tr(`${perps.length} 个合约 · ${optCount} 个期权`, `${perps.length} perps · ${optCount} options`)}{cfdCount > 0 && tr(` · ${cfdCount} 个 CFD`, ` · ${cfdCount} CFD`)}</span>} />
 
-      <Tile label="合约名义敞口" value={fmtUSD(longN + shortN, { decimals: false })}
-        foot={<span>净敞口 <span className={`num ${pnlClass(longN - shortN)}`}>{fmtSigned(longN - shortN, { decimals: false })}</span></span>}>
+      <Tile label={tr('合约敞口（含杠杆 ETF 倍数）', 'Perp exposure (incl. leveraged ETFs)')} value={fmtUSD(longN + shortN, { decimals: false })}
+        foot={<span>{tr('净敞口', 'Net')} <span className={`num ${pnlClass(longN - shortN)}`}>{fmtSigned(longN - shortN, { decimals: false })}</span></span>}>
         <SplitBar parts={[{ v: longN, c: 'var(--color-profit)' }, { v: shortN, c: 'var(--color-loss)' }]} />
         <div className="flex gap-4 text-[12px]">
-          <span>多 <span className="num text-profit">{fmtCompact(longN)}</span></span>
-          <span>空 <span className="num text-loss">{fmtCompact(shortN)}</span></span>
+          <span>{tr('多', 'Long')} <span className="num text-profit">{fmtCompact(longN)}</span></span>
+          <span>{tr('空', 'Short')} <span className="num text-loss">{fmtCompact(shortN)}</span></span>
         </div>
       </Tile>
     </div>

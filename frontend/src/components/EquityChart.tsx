@@ -1,22 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
-import { createChart, AreaSeries, type IChartApi, type ISeriesApi, ColorType, LineType, type UTCTimestamp } from 'lightweight-charts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createChart, BaselineSeries, ColorType, LineStyle, LineType, TickMarkType,
+  type IChartApi, type IPriceLine, type ISeriesApi, type Time, type UTCTimestamp,
+} from 'lightweight-charts';
 import { useHistory, useHistoryAccounts } from '../hooks/usePortfolio';
 import type { TimePeriod } from '../types';
+import { fmtCompact, fmtPct, fmtSigned, fmtUSD, pnlClass } from '../lib/format';
+import { locale, tr } from '../lib/i18n';
 
 const PERIODS: { key: TimePeriod; label: string }[] = [
   { key: '1h', label: '1H' },
   { key: '4h', label: '4H' },
   { key: '24h', label: '24H' },
   { key: '1w', label: '1W' },
+  { key: '30d', label: '1M' },
   { key: 'all', label: 'ALL' },
 ];
 
-function formatUSD(n: number, compact = false): string {
-  if (compact && Math.abs(n) >= 1000) {
-    return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  }
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+// Theme tokens (lightweight-charts draws on canvas, so CSS vars must be resolved to literals)
+const PROFIT = '#2ecc8f';
+const LOSS = '#f2545b';
+const MUTED = '#5d6475';
+
+// lightweight-charts renders UTCTimestamp as UTC; format in the viewer's local time instead
+const asDate = (t: Time) => new Date((t as number) * 1000);
+const fmtTick = (t: Time, type: TickMarkType) => {
+  const d = asDate(t);
+  if (type === TickMarkType.Year) return String(d.getFullYear());
+  if (type === TickMarkType.Month || type === TickMarkType.DayOfMonth) return d.toLocaleDateString(locale(), { month: 'numeric', day: 'numeric' });
+  return d.toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit', hour12: false });
+};
+const fmtFull = (t: number) => new Date(t * 1000).toLocaleString(locale(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+
+interface Hover { x: number; y: number; t: number; v: number }
+
+// Stable reference while history loads, so effects keyed on `points` don't re-run every render
+const EMPTY: Array<{ t: number; v: number }> = [];
 
 export function EquityChart() {
   const [period, setPeriod] = useState<TimePeriod>('24h');
@@ -26,109 +45,124 @@ export function EquityChart() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<'Area'> | null>(null);
+  const seriesRef = useRef<ISeriesApi<'Baseline'> | null>(null);
+  const baseLineRef = useRef<IPriceLine | null>(null);
+  const [hover, setHover] = useState<Hover | null>(null);
 
-  const isPositive = (history?.pnl ?? 0) >= 0;
-  const lineColor = isPositive ? '#2ecc8f' : '#f2545b';
-  const topColor = isPositive ? 'rgba(46,204,143,0.18)' : 'rgba(242,84,91,0.18)';
-  const bottomColor = 'rgba(0,0,0,0)';
+  const points = history?.points ?? EMPTY;
+  const stats = useMemo(() => {
+    if (!points.length) return null;
+    const start = points[0].v;
+    const end = points[points.length - 1].v;
+    let hi = -Infinity, lo = Infinity, peak = -Infinity, dd = 0, ddPct = 0;
+    for (const p of points) {
+      hi = Math.max(hi, p.v); lo = Math.min(lo, p.v);
+      peak = Math.max(peak, p.v);
+      if (peak - p.v > dd) { dd = peak - p.v; ddPct = peak > 0 ? (dd / peak) * 100 : 0; }
+    }
+    return { start, end, hi, lo, dd, ddPct, from: points[0].t };
+  }, [points]);
 
   // Create chart once
   useEffect(() => {
-    if (!containerRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
 
-    const chart = createChart(containerRef.current, {
+    const chart = createChart(el, {
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: '#5d6475',
+        textColor: MUTED,
         fontFamily: "'JetBrains Mono', ui-monospace, monospace",
         fontSize: 11,
+        attributionLogo: false,
       },
-      grid: {
-        vertLines: { visible: false },
-        horzLines: { color: 'rgba(29,34,45,0.7)' },
-      },
+      grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(29,34,45,0.7)' } },
       crosshair: {
-        vertLine: { color: 'rgba(139,156,255,0.35)', width: 1, labelBackgroundColor: '#1d222d' },
-        horzLine: { color: 'rgba(139,156,255,0.35)', width: 1, labelBackgroundColor: '#1d222d' },
+        vertLine: { color: 'rgba(144,151,168,0.35)', width: 1, style: LineStyle.Solid, labelVisible: false },
+        horzLine: { visible: false, labelVisible: false },
       },
-      rightPriceScale: {
-        borderVisible: false,
-        scaleMargins: { top: 0.1, bottom: 0.05 },
-      },
+      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.08 } },
       timeScale: {
         borderVisible: false,
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: (t: Time, type: TickMarkType) => fmtTick(t, type),
       },
+      localization: { timeFormatter: (t: Time) => fmtFull(t as number), priceFormatter: (p: number) => fmtCompact(p) },
       handleScroll: false,
       handleScale: false,
     });
 
-    const series = chart.addSeries(AreaSeries, {
-      lineColor,
-      topColor,
-      bottomColor,
+    // Baseline at the period's opening equity: green above, red below
+    const series = chart.addSeries(BaselineSeries, {
+      baseValue: { type: 'price', price: 0 },
+      topLineColor: PROFIT,
+      topFillColor1: 'rgba(46,204,143,0.20)',
+      topFillColor2: 'rgba(46,204,143,0.02)',
+      bottomLineColor: LOSS,
+      bottomFillColor1: 'rgba(242,84,91,0.02)',
+      bottomFillColor2: 'rgba(242,84,91,0.20)',
       lineWidth: 2,
-      lineType: LineType.Curved,
-      priceFormat: { type: 'custom', formatter: (p: number) => formatUSD(p, true) },
+      lineType: LineType.Simple, // curved interpolation overshoots and invents values
+      priceLineVisible: false,
+      lastValueVisible: true,
       crosshairMarkerRadius: 4,
-      crosshairMarkerBackgroundColor: lineColor,
+      crosshairMarkerBorderColor: '#11141b',
+      crosshairMarkerBorderWidth: 2,
+      priceFormat: { type: 'custom', formatter: (p: number) => fmtCompact(p), minMove: 0.01 },
+    });
+
+    chart.subscribeCrosshairMove((param) => {
+      const d = param.point && param.time != null ? param.seriesData.get(series) as { value?: number } | undefined : undefined;
+      if (!param.point || d?.value == null) { setHover(null); return; }
+      setHover({ x: param.point.x, y: param.point.y, t: param.time as number, v: d.value });
     });
 
     chartRef.current = chart;
     seriesRef.current = series;
 
     const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        chart.applyOptions({ width: entry.contentRect.width });
-      }
+      for (const e of entries) chart.applyOptions({ width: e.contentRect.width, height: e.contentRect.height });
     });
-    ro.observe(containerRef.current);
+    ro.observe(el);
 
     return () => {
       ro.disconnect();
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      baseLineRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update series data + colors when history or period changes
+  // Push data + move the baseline to the period's opening value
   useEffect(() => {
-    if (!seriesRef.current || !chartRef.current) return;
+    const series = seriesRef.current, chart = chartRef.current;
+    if (!series || !chart) return;
+    if (baseLineRef.current) { series.removePriceLine(baseLineRef.current); baseLineRef.current = null; }
+    if (!points.length) { series.setData([]); return; }
 
-    seriesRef.current.applyOptions({
-      lineColor,
-      topColor,
-      bottomColor,
-      crosshairMarkerBackgroundColor: lineColor,
+    const start = points[0].v;
+    series.applyOptions({ baseValue: { type: 'price', price: start } });
+    series.setData(points.map((p) => ({ time: p.t as UTCTimestamp, value: p.v })));
+    baseLineRef.current = series.createPriceLine({
+      price: start, color: MUTED, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: '',
     });
+    chart.timeScale().fitContent();
+  }, [points]);
 
-    if (history?.points?.length) {
-      const data = history.points.map((p) => ({
-        time: p.t as UTCTimestamp,
-        value: p.v,
-      }));
-      seriesRef.current.setData(data);
-      chartRef.current.timeScale().fitContent();
-    } else {
-      seriesRef.current.setData([]);
-    }
-  }, [history, lineColor, topColor, bottomColor]);
+  const title = selectedAccount ? accounts?.find((a) => a.accountId === selectedAccount)?.label ?? selectedAccount : tr('资产走势', 'Equity');
+  const pnl = history?.pnl ?? 0;
+  const spanH = stats && points.length > 1 ? (points[points.length - 1].t - stats.from) / 3600 : 0;
 
   return (
-    <section className="card overflow-hidden relative">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4 pb-1">
+    <section className="card overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4 pb-2">
         <div className="flex items-baseline gap-3 min-w-0">
-          <h2 className="section-title">
-            {selectedAccount ? accounts?.find((a) => a.accountId === selectedAccount)?.label ?? selectedAccount : '资产走势'}
-          </h2>
-          {history && history.points.length > 0 && (
-            <span className={`num text-[13px] font-medium ${isPositive ? 'text-profit' : 'text-loss'}`}>
-              {isPositive ? '+' : ''}{formatUSD(history.pnl)}
-              <span className="ml-1.5 opacity-75">{isPositive ? '+' : ''}{history.pnlPercent.toFixed(2)}%</span>
+          <h2 className="section-title">{title}</h2>
+          {stats && (
+            <span className={`num text-[13px] font-medium ${pnlClass(pnl)}`}>
+              {fmtSigned(pnl)}<span className="ml-1.5 opacity-75">{fmtPct(history?.pnlPercent ?? 0)}</span>
             </span>
           )}
         </div>
@@ -139,7 +173,7 @@ export function EquityChart() {
               onChange={(e) => setSelectedAccount(e.target.value || undefined)}
               className="text-[12px] bg-bg-inset border border-border-card rounded-lg px-2.5 py-1 text-text-secondary outline-none focus:border-border-hover"
             >
-              <option value="">全部账户</option>
+              <option value="">{tr('全部账户', 'All accounts')}</option>
               {accounts.map((acc) => <option key={acc.accountId} value={acc.accountId}>{acc.label}</option>)}
             </select>
           )}
@@ -151,11 +185,49 @@ export function EquityChart() {
         </div>
       </div>
 
-      <div ref={containerRef} className="w-full h-[260px]" />
+      {stats && (
+        <div className="flex flex-wrap gap-x-6 gap-y-1 px-5 pb-2 text-[12px] text-text-muted">
+          <span>{tr('期初', 'Open')} <span className="num text-text-secondary">{fmtUSD(stats.start, { decimals: false })}</span></span>
+          <span>{tr('当前', 'Now')} <span className="num text-text-primary">{fmtUSD(stats.end, { decimals: false })}</span></span>
+          <span>{tr('最高', 'High')} <span className="num text-text-secondary">{fmtUSD(stats.hi, { decimals: false })}</span></span>
+          <span>{tr('最低', 'Low')} <span className="num text-text-secondary">{fmtUSD(stats.lo, { decimals: false })}</span></span>
+          <span>{tr('区间最大回撤', 'Max drawdown')} <span className={`num ${stats.dd > 0 ? 'text-loss' : 'text-text-secondary'}`}>{stats.dd > 0 ? `${fmtSigned(-stats.dd)} (${fmtPct(-stats.ddPct)})` : '—'}</span></span>
+        </div>
+      )}
 
-      {(!history || history.points.length === 0) && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-text-muted text-sm">正在采集数据…</span>
+      <div className="relative">
+        <div ref={containerRef} className="w-full h-[280px]" />
+
+        {hover && stats && (
+          <div
+            className="pointer-events-none absolute z-10 card !rounded-lg px-3 py-2 text-[12px] shadow-lg whitespace-nowrap"
+            style={{
+              left: Math.min(Math.max(hover.x + 14, 8), (containerRef.current?.clientWidth ?? 0) - 190),
+              top: Math.max(hover.y - 70, 4),
+            }}
+          >
+            <div className="text-text-muted num">{fmtFull(hover.t)}</div>
+            <div className="num text-[14px] font-semibold text-text-primary">{fmtUSD(hover.v)}</div>
+            <div className={`num ${pnlClass(hover.v - stats.start)}`}>
+              {fmtSigned(hover.v - stats.start)} · {fmtPct(stats.start > 0 ? ((hover.v - stats.start) / stats.start) * 100 : 0)}
+              <span className="text-text-muted"> {tr('较期初', 'vs open')}</span>
+            </div>
+          </div>
+        )}
+
+        {!points.length && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="text-text-muted text-sm">{tr('正在采集数据…', 'Collecting data…')}</span>
+          </div>
+        )}
+      </div>
+
+      {stats && (period === '1w' || period === '30d' || period === 'all') && (
+        <div className="px-5 pb-3 -mt-1 text-[11px] text-text-muted">
+          {tr(
+            `近期为 30 秒精度，更早的数据每 30 分钟一个点（本地 SQLite 保存，重启不丢失）· 覆盖 ${spanH < 48 ? `${spanH.toFixed(1)} 小时` : `${(spanH / 24).toFixed(1)} 天`}`,
+            `Recent data at 30s resolution, older data one point per 30 min (stored in local SQLite, survives restarts) · covering ${spanH < 48 ? `${spanH.toFixed(1)} h` : `${(spanH / 24).toFixed(1)} d`}`,
+          )}
         </div>
       )}
     </section>

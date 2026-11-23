@@ -5,7 +5,7 @@ import type { AppConfig, ExchangeType, AccountConfig } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const VALID_EXCHANGES: ExchangeType[] = ['ibkr', 'binance', 'okx', 'hyperliquid', 'bybit', 'bitget'];
+const VALID_EXCHANGES: ExchangeType[] = ['ibkr', 'binance', 'okx', 'hyperliquid', 'bybit', 'bitget', 'mt5'];
 
 const REQUIRED_CREDENTIAL_FIELDS: Record<ExchangeType, string[]> = {
   ibkr: ['flexQueryId', 'flexToken'],
@@ -14,6 +14,7 @@ const REQUIRED_CREDENTIAL_FIELDS: Record<ExchangeType, string[]> = {
   hyperliquid: ['walletAddress'],
   bybit: ['apiKey', 'apiSecret'],
   bitget: ['apiKey', 'apiSecret', 'passphrase'],
+  mt5: ['password', 'server'],
 };
 
 function validateAccount(account: unknown, index: number): AccountConfig {
@@ -40,6 +41,9 @@ function validateAccount(account: unknown, index: number): AccountConfig {
     if (!creds[field] || typeof creds[field] !== 'string') {
       throw new Error(`accounts[${index}] (${a.id}): credentials missing "${field}" for ${exchange}`);
     }
+  }
+  if (exchange === 'mt5' && !/^\d+$/.test(String(creds.login ?? '').trim())) {
+    throw new Error(`accounts[${index}] (${a.id}): credentials "login" must be the numeric MT5 account number`);
   }
 
   return a as unknown as AccountConfig;
@@ -71,8 +75,8 @@ export function loadConfig(): AppConfig {
 
   // Skip accounts whose credentials are still placeholders (e.g. "YOUR_API_KEY")
   const isPlaceholder = (a: Record<string, unknown>) =>
-    Object.values((a.credentials ?? {}) as Record<string, unknown>).some(
-      (v) => typeof v === 'string' && (v.trim() === '' || v.startsWith('YOUR_') || v.startsWith('0xYOUR_')),
+    Object.entries((a.credentials ?? {}) as Record<string, unknown>).some(([k, v]) => k !== 'host' && (
+        typeof v === 'string' && (v.trim() === '' || v.startsWith('YOUR_') || v.startsWith('0xYOUR_'))),
     );
   const accounts = (parsed.accounts as Record<string, unknown>[])
     .filter((a) => {
@@ -104,6 +108,8 @@ export function loadConfig(): AppConfig {
   const config: AppConfig = {
     pollIntervalSeconds: typeof parsed.pollIntervalSeconds === 'number' ? parsed.pollIntervalSeconds : 30,
     ibkrPollIntervalSeconds: typeof parsed.ibkrPollIntervalSeconds === 'number' ? parsed.ibkrPollIntervalSeconds : 300,
+    mt5PollIntervalSeconds: typeof parsed.mt5PollIntervalSeconds === 'number' ? parsed.mt5PollIntervalSeconds : 60,
+    alerts: parsed.alerts && typeof parsed.alerts === 'object' ? (parsed.alerts as AppConfig['alerts']) : undefined,
     accounts,
   };
 
