@@ -10,7 +10,7 @@ IBKR is currently disabled (`"enabled": false` in accounts.json) — set to true
 - Backend: backend/ (Fastify, Node 22, TypeScript, port 8189)
 - Frontend: frontend/ (Vite dev / serve.cjs prod, React 18, Tailwind, port 8188)
 - Deployment: PM2 via ecosystem.config.cjs (two processes: unify-backend, unify-frontend)
-- Cloudflare Tunnel: your-domain.example → localhost:8188
+- Cloudflare Tunnel: <public domain> → localhost:8188 (never write the real domain into the repo; Vite dev reads extra hosts from `ALLOWED_HOSTS`)
 
 ## Deployment
 - `frontend/serve.cjs` — lightweight Node HTTP server for production: serves static files from `frontend/dist/`, proxies `/api/*` to `http://127.0.0.1:8189`, SPA fallback
