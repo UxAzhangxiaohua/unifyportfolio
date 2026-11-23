@@ -11,6 +11,8 @@ export interface StoredPoint {
   t: number; // unix seconds
   total: number;
   accounts: Record<string, number>;
+  /** Per-account USD outside the trading wallets (earn + funding stables); absent on old rows */
+  off?: Record<string, number>;
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -39,8 +41,10 @@ export async function historyDbOpen(): Promise<boolean> {
         data TEXT NOT NULL             -- JSON StoredFlow
       );
     `);
+    // Added later: per-account earn/funding amounts, for the trading-accounts curve
+    try { db.exec('ALTER TABLE equity_snapshots ADD COLUMN off TEXT'); } catch { /* already there */ }
     flowStmt = db.prepare('INSERT OR REPLACE INTO fund_flows (key, data) VALUES (?, ?)');
-    insertStmt = db.prepare('INSERT OR REPLACE INTO equity_snapshots (t, total, accounts) VALUES (?, ?, ?)');
+    insertStmt = db.prepare('INSERT OR REPLACE INTO equity_snapshots (t, total, accounts, off) VALUES (?, ?, ?, ?)');
     console.log(`[db] history store: ${DB_PATH}`);
     return true;
   } catch (err) {
@@ -53,8 +57,8 @@ export async function historyDbOpen(): Promise<boolean> {
 export function historyDbLoad(): StoredPoint[] {
   if (!db) return [];
   try {
-    const rows = db.prepare('SELECT t, total, accounts FROM equity_snapshots ORDER BY t').all() as Array<{ t: number; total: number; accounts: string }>;
-    return rows.map((r) => ({ t: Number(r.t), total: Number(r.total), accounts: JSON.parse(r.accounts) }));
+    const rows = db.prepare('SELECT t, total, accounts, off FROM equity_snapshots ORDER BY t').all() as Array<{ t: number; total: number; accounts: string; off: string | null }>;
+    return rows.map((r) => ({ t: Number(r.t), total: Number(r.total), accounts: JSON.parse(r.accounts), ...(r.off ? { off: JSON.parse(r.off) } : {}) }));
   } catch (err) {
     console.error(`[db] load failed: ${err instanceof Error ? err.message : err}`);
     return [];
@@ -64,7 +68,7 @@ export function historyDbLoad(): StoredPoint[] {
 export function historyDbInsert(p: StoredPoint): void {
   if (!insertStmt) return;
   try {
-    insertStmt.run(p.t, p.total, JSON.stringify(p.accounts));
+    insertStmt.run(p.t, p.total, JSON.stringify(p.accounts), p.off ? JSON.stringify(p.off) : null);
   } catch (err) {
     console.error(`[db] insert failed: ${err instanceof Error ? err.message : err}`);
   }

@@ -44,6 +44,10 @@ function AccountCard({ a, total }: { a: AccountSnapshot; total: number }) {
   const earn = (a.stables ?? []).filter((b) => b.location === 'earn').reduce((s, b) => s + b.amount, 0);
   const perps = a.positions.filter((p) => p.assetClass === 'crypto-perp' || p.assetClass === 'crypto-future').length;
   const opts = a.positions.filter((p) => p.assetClass === 'option').length;
+  const cfdPos = a.positions.filter((p) => p.assetClass === 'cfd');
+  // CFD-only broker account (MT5): no perps/options/earn — show positions and margin instead
+  const cfdOnly = a.exchange === 'mt5';
+  const lots = cfdPos.reduce((s, p) => s + p.quantity, 0);
   const share = total > 0 ? (a.equity / total) * 100 : 0;
   const mr = a.marginRatio;
   const status = a.error ? 'error' : a.isDelayed ? 'delayed' : 'ok';
@@ -78,10 +82,17 @@ function AccountCard({ a, total }: { a: AccountSnapshot; total: number }) {
             <div className="text-text-muted text-[11px]">{tr('稳定币', 'Stables')}</div>
             <div className="num">{fmtCompact(stables)}</div>
           </div>
-          <div className="rounded-lg bg-bg-inset px-2.5 py-2">
-            <div className="text-text-muted text-[11px]">{tr('理财', 'Earn')}</div>
-            <div className="num text-earn">{fmtCompact(earn)}</div>
-          </div>
+          {cfdOnly ? (
+            <div className="rounded-lg bg-bg-inset px-2.5 py-2">
+              <div className="text-text-muted text-[11px]">{tr('已用保证金', 'Margin')}</div>
+              <div className="num">{a.marginUsed != null ? fmtCompact(a.marginUsed) : '—'}</div>
+            </div>
+          ) : (
+            <div className="rounded-lg bg-bg-inset px-2.5 py-2">
+              <div className="text-text-muted text-[11px]">{tr('理财', 'Earn')}</div>
+              <div className="num text-earn">{fmtCompact(earn)}</div>
+            </div>
+          )}
         </div>
       )}
 
@@ -101,8 +112,16 @@ function AccountCard({ a, total }: { a: AccountSnapshot; total: number }) {
       )}
 
       <div className="flex gap-3 text-[11.5px] text-text-muted mt-auto">
-        <span>{tr('合约', 'Perps')} <span className="text-text-secondary">{perps}</span></span>
-        <span>{tr('期权', 'Options')} <span className="text-text-secondary">{opts}</span></span>
+        {cfdOnly ? (
+          <span>{tr('持仓', 'Positions')} <span className="text-text-secondary">{cfdPos.length}</span>
+            {cfdPos.length > 0 && <span className="num"> · {+lots.toFixed(2)} {tr('手', 'lots')}</span>}</span>
+        ) : (
+          <>
+            <span>{tr('合约', 'Perps')} <span className="text-text-secondary">{perps}</span></span>
+            <span>{tr('期权', 'Options')} <span className="text-text-secondary">{opts}</span></span>
+            {cfdPos.length > 0 && <span>CFD <span className="text-text-secondary">{cfdPos.length}</span></span>}
+          </>
+        )}
         {a.warnings?.length ? <span className="text-delayed ml-auto" title={a.warnings.join('\n')}>⚠ {a.warnings.length}</span> : null}
       </div>
     </div>

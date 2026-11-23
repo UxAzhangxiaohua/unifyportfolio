@@ -32,6 +32,8 @@ const fmtTick = (t: Time, type: TickMarkType) => {
 };
 const fmtFull = (t: number) => new Date(t * 1000).toLocaleString(locale(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 
+const SCOPE_KEY = 'unify.chartScope';
+
 interface Hover { x: number; y: number; t: number; v: number }
 
 // Stable reference while history loads, so effects keyed on `points` don't re-run every render
@@ -40,7 +42,12 @@ const EMPTY: Array<{ t: number; v: number }> = [];
 export function EquityChart() {
   const [period, setPeriod] = useState<TimePeriod>('24h');
   const [selectedAccount, setSelectedAccount] = useState<string | undefined>(undefined);
-  const { data: history } = useHistory(period, selectedAccount);
+  // 'trading' = equity minus earn + funding wallets (CFD/MT5 count as trading)
+  const [scope, setScope] = useState<'total' | 'trading'>(() => {
+    try { return localStorage.getItem(SCOPE_KEY) === 'trading' ? 'trading' : 'total'; } catch { return 'total'; }
+  });
+  useEffect(() => { try { localStorage.setItem(SCOPE_KEY, scope); } catch { /* ignore */ } }, [scope]);
+  const { data: history } = useHistory(period, selectedAccount, scope);
   const { data: accounts } = useHistoryAccounts();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -151,7 +158,10 @@ export function EquityChart() {
     chart.timeScale().fitContent();
   }, [points]);
 
-  const title = selectedAccount ? accounts?.find((a) => a.accountId === selectedAccount)?.label ?? selectedAccount : tr('资产走势', 'Equity');
+  const acctLabel = selectedAccount ? accounts?.find((a) => a.accountId === selectedAccount)?.label ?? selectedAccount : null;
+  const title = scope === 'trading'
+    ? (acctLabel ? `${acctLabel} · ${tr('交易账户', 'Trading')}` : tr('交易账户走势', 'Trading equity'))
+    : acctLabel ?? tr('资产走势', 'Equity');
   const pnl = history?.pnl ?? 0;
   const spanH = stats && points.length > 1 ? (points[points.length - 1].t - stats.from) / 3600 : 0;
 
@@ -167,6 +177,10 @@ export function EquityChart() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <div className="seg" title={tr('交易账户 = 权益 − 理财 − 资金账户余额（CFD/MT5 计入交易账户）', 'Trading = equity − earn − funding wallets (CFD/MT5 count as trading)')}>
+            <button data-active={scope === 'total'} onClick={() => setScope('total')}>{tr('总权益', 'Total')}</button>
+            <button data-active={scope === 'trading'} onClick={() => setScope('trading')}>{tr('交易账户', 'Trading')}</button>
+          </div>
           {accounts && accounts.length > 1 && (
             <select
               value={selectedAccount ?? ''}
@@ -217,7 +231,9 @@ export function EquityChart() {
 
         {!points.length && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <span className="text-text-muted text-sm">{tr('正在采集数据…', 'Collecting data…')}</span>
+            <span className="text-text-muted text-sm">{scope === 'trading'
+              ? tr('交易账户曲线从本次更新开始记录，正在采集…', 'Trading-equity history starts with this update — collecting…')
+              : tr('正在采集数据…', 'Collecting data…')}</span>
           </div>
         )}
       </div>

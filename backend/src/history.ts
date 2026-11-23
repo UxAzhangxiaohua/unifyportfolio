@@ -6,7 +6,12 @@ interface EquityPoint {
   t: number; // unix seconds
   total: number;
   accounts: Record<string, number>;
+  /** Per-account USD outside the trading wallets (earn + funding stables). Absent on old points */
+  off?: Record<string, number>;
 }
+
+/** 'total' = all equity; 'trading' = equity minus earn and funding wallets (CFD/MT5 count as trading) */
+export type HistoryScope = 'total' | 'trading';
 
 const MAX_POINTS = 25_000; // ~8.5 days at 30s intervals
 /** Fine-grained 30s samples since this process started (in memory) */
@@ -45,15 +50,19 @@ function series(): EquityPoint[] {
 }
 
 /** Most recent recorded equity per account (session first, then persisted history) */
-function lastKnown(accountId: string): number | null {
+function lastKnown(accountId: string): { equity: number; off: number | null } | null {
   for (const list of [points, longPoints]) {
     for (let i = list.length - 1; i >= 0; i--) {
       const v = list[i].accounts[accountId];
-      if (v != null) return v;
+      if (v != null) return { equity: v, off: list[i].off ? list[i].off![accountId] ?? 0 : null };
     }
   }
   return null;
 }
+
+/** USD of an account outside its trading wallets */
+const offTrading = (a: AccountSnapshot) =>
+  (a.stables ?? []).filter((s) => s.location !== 'trading').reduce((s, b) => s + b.amount, 0);
 
 /**
  * @param expectedIds accounts that should be in the total. One without data yet (its first fetch
@@ -64,16 +73,21 @@ export function historyRecord(accounts: AccountSnapshot[], expectedIds: string[]
   if (accounts.length === 0) return;
 
   const accts: Record<string, number> = {};
+  const off: Record<string, number> = {};
   for (const a of accounts) {
     accts[a.accountId] = a.equity;
+    const o = offTrading(a);
+    if (o) off[a.accountId] = o;
   }
   for (const id of expectedIds) {
     if (accts[id] != null) continue;
     const prev = lastKnown(id);
-    if (prev != null) accts[id] = prev;
+    if (prev == null) continue;
+    accts[id] = prev.equity;
+    if (prev.off) off[id] = prev.off;
   }
   const total = Object.values(accts).reduce((s, v) => s + v, 0);
-  const point = { t: Math.floor(Date.now() / 1000), total, accounts: accts };
+  const point: EquityPoint = { t: Math.floor(Date.now() / 1000), total, accounts: accts, off };
   points.push(point);
 
   // Persist on the first complete sample after a restart, then every 30 min
@@ -103,22 +117,27 @@ export interface HistoryResponse {
   period: string;
 }
 
-export function historyGet(period: string, accountId?: string): HistoryResponse {
+export function historyGet(period: string, accountId?: string, scope: HistoryScope = 'total'): HistoryResponse {
   const cutoff =
     period === 'all'
       ? 0
       : Math.floor(Date.now() / 1000) - (PERIOD_SECONDS[period] ?? 3600);
 
   // Skip samples taken before a given account had data, instead of plotting them as 0
-  const filtered = series().filter((p) => p.t >= cutoff && (!accountId || p.accounts[accountId] != null));
+  // Trading scope uses raw totals (no transit lift: the funds left a funding wallet, which this
+  // scope excludes anyway) and only points recorded with the earn/funding breakdown
+  const trading = scope === 'trading';
+  const filtered = (trading ? rawSeries().filter((p) => p.off) : series())
+    .filter((p) => p.t >= cutoff && (!accountId || p.accounts[accountId] != null));
 
   if (filtered.length === 0) {
     return { points: [], pnl: 0, pnlPercent: 0, period };
   }
 
+  const sumOff = (p: EquityPoint) => Object.values(p.off ?? {}).reduce((s, v) => s + v, 0);
   const getValue = accountId
-    ? (p: EquityPoint) => p.accounts[accountId] ?? 0
-    : (p: EquityPoint) => p.total;
+    ? (p: EquityPoint) => (p.accounts[accountId] ?? 0) - (trading ? p.off?.[accountId] ?? 0 : 0)
+    : (p: EquityPoint) => (trading ? p.total - sumOff(p) : p.total);
 
   const startEquity = getValue(filtered[0]);
   const currentEquity = getValue(filtered[filtered.length - 1]);

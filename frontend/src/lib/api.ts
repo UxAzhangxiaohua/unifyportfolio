@@ -6,9 +6,11 @@ export async function fetchPortfolio(): Promise<PortfolioResponse> {
   return res.json();
 }
 
-export async function fetchHistory(period: TimePeriod, accountId?: string): Promise<HistoryResponse> {
+/** scope 'trading' = equity minus earn and funding wallets */
+export async function fetchHistory(period: TimePeriod, accountId?: string, scope: 'total' | 'trading' = 'total'): Promise<HistoryResponse> {
   const params = new URLSearchParams({ period });
   if (accountId) params.set('accountId', accountId);
+  if (scope === 'trading') params.set('scope', 'trading');
   const res = await fetch(`/api/history?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();

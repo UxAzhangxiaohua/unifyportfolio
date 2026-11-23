@@ -11,10 +11,10 @@ export function usePortfolio() {
   });
 }
 
-export function useHistory(period: TimePeriod, accountId?: string) {
+export function useHistory(period: TimePeriod, accountId?: string, scope: 'total' | 'trading' = 'total') {
   return useQuery({
-    queryKey: ['history', period, accountId ?? 'total'],
-    queryFn: () => fetchHistory(period, accountId),
+    queryKey: ['history', period, accountId ?? 'total', scope],
+    queryFn: () => fetchHistory(period, accountId, scope),
     refetchInterval: 30_000,
     staleTime: 15_000,
   });

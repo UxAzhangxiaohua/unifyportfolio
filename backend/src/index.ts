@@ -82,10 +82,10 @@ app.get('/api/portfolio', async (): Promise<PortfolioResponse> => {
 });
 
 // Equity history
-app.get<{ Querystring: { period?: string; accountId?: string } }>('/api/history', async (request) => {
+app.get<{ Querystring: { period?: string; accountId?: string; scope?: string } }>('/api/history', async (request) => {
   const period = request.query.period ?? '24h';
   const accountId = request.query.accountId || undefined;
-  return historyGet(period, accountId);
+  return historyGet(period, accountId, request.query.scope === 'trading' ? 'trading' : 'total');
 });
 
 // Account list for history filter

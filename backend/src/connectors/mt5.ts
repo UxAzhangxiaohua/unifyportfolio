@@ -170,7 +170,11 @@ export class MT5Connector extends BaseConnector {
         marginUsed: used,
         marginRatio: equity > 0 ? used / equity : null,
         positions,
-        stables: [],
+        // Account cash = trading-wallet stables (USD ≈ USDT); excludes floating PnL and credit/bonus,
+        // the same convention as Bitget CFD
+        stables: Math.abs(s.balanceUsd) >= 0.01
+          ? [{ asset: 'USDT', location: 'trading', amount: s.balanceUsd, source: `MT5 (${s.currency || 'USD'})` }]
+          : [],
         fetchedAt: new Date().toISOString(),
         isDelayed: false,
         warnings: s.warnings?.length ? s.warnings : undefined,
