@@ -133,14 +133,17 @@ export class BinanceConnector extends BaseConnector {
       const indexPx = new Map<string, number>();
       if (openOptions.length) {
         const underlyings = [...new Set(openOptions.map((o) => `${o.symbol.split('-')[0]}USDT`))];
-        await Promise.all([
-          this.sticky('Option greeks', warnings, async () => {
-            for (const m of await this.publicGet<OptionMark[]>('/eapi/v1/mark')) marks.set(m.symbol, m);
-          }, undefined, true),
-          ...underlyings.map((u) => this.sticky(`Option index ${u}`, warnings, async () => {
-            indexPx.set(u, num((await this.publicGet<{ indexPrice: string }>('/eapi/v1/index', { underlying: u })).indexPrice));
-          }, undefined, true)),
+        // The closures return their data so sticky() can serve the last good copy on failure
+        const [markList, idx] = await Promise.all([
+          this.sticky('Option greeks', warnings, () => this.publicGet<OptionMark[]>('/eapi/v1/mark'), [] as OptionMark[], true),
+          this.sticky('Option index', warnings, async () => {
+            const px = await Promise.all(underlyings.map(async (u) =>
+              [u, num((await this.publicGet<{ indexPrice: string }>('/eapi/v1/index', { underlying: u })).indexPrice)] as const));
+            return new Map(px);
+          }, new Map<string, number>(), true),
         ]);
+        for (const m of markList) marks.set(m.symbol, m);
+        for (const [u, px] of idx) if (px > 0) indexPx.set(u, px);
       }
 
       for (const o of openOptions) {

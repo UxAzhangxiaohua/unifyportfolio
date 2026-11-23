@@ -85,12 +85,22 @@ export class OKXConnector extends BaseConnector {
       for (const o of staking) for (const i of o.investData ?? []) add(i.ccy, 'earn', num(i.amt), 'On-chain Earn');
 
       const families = [...new Set(positionsRaw.filter((p) => p.instType === 'OPTION').map((p) => p.instId.split('-').slice(0, 2).join('-')))];
-      await Promise.all(families.filter((f) => !ctMultCache.has(f)).map((f) => this.sticky(`Option specs ${f}`, warnings, async () => {
-        const res = await fetch(`${BASE_URL}/api/v5/public/instruments?instType=OPTION&instFamily=${f}`);
-        const body = (await res.json()) as { data?: Array<{ ctMult: string; ctVal: string }> };
-        const i = body.data?.[0];
-        if (i) ctMultCache.set(f, (num(i.ctMult) || 1) * (num(i.ctVal) || 1));
-      }, undefined)));
+      // Cached for the process lifetime; on failure the multiplier stays unknown (null) and is retried next cycle
+      await Promise.all(families.filter((f) => !ctMultCache.has(f)).map(async (f) => {
+        try {
+          const res = await fetch(`${BASE_URL}/api/v5/public/instruments?instType=OPTION&instFamily=${encodeURIComponent(f)}`,
+            { signal: AbortSignal.timeout(10_000) });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const body = (await res.json()) as { code?: string; msg?: string; data?: Array<{ ctMult: string; ctVal: string }> };
+          if (body.code !== '0') throw new Error(`code ${body.code}: ${body.msg}`);
+          const i = body.data?.[0];
+          const m = i ? (num(i.ctMult) || 1) * (num(i.ctVal) || 1) : 0;
+          if (!(m > 0)) throw new Error('no contract multiplier in response');
+          ctMultCache.set(f, m);
+        } catch (err) {
+          warnings.push(`Option specs ${f}: ${err instanceof Error ? err.message : String(err)} — option PnL estimates unavailable`.substring(0, 300));
+        }
+      }));
 
       const positions: Position[] = [];
       for (const p of positionsRaw) {
@@ -132,7 +142,7 @@ export class OKXConnector extends BaseConnector {
               vega: okxGreek(p.vegaBS),
               underlyingPrice: num(p.idxPx) || null,
               premiumCcy: STABLES.has(p.ccy) ? undefined : p.ccy,
-              contractMultiplier: ctMultCache.get(p.instId.split('-').slice(0, 2).join('-')),
+              contractMultiplier: ctMultCache.get(p.instId.split('-').slice(0, 2).join('-')) ?? null,
             };
           }
         }
@@ -174,11 +184,30 @@ export class OKXConnector extends BaseConnector {
     }
   }
 
-  /** OKX: `amt` excludes the fee (fee charged separately, verified live); `before` = records newer than ts */
+  /**
+   * Newest-first history pages (max 100 rows, all coins) walked backwards with `after` (= records
+   * older than ts) until a page reaches `sinceMs` — a single `before=since` page could miss the
+   * newest records once more than 100 exist in the window.
+   */
+  private async historySince<T extends { ts: string }>(path: string, sinceMs: number): Promise<T[]> {
+    const out: T[] = [];
+    let after: number | null = null;
+    for (let page = 0; page < 20; page++) {
+      const rows: T[] = await this.signedGet<T[]>(`${path}?limit=100${after != null ? `&after=${after}` : ''}`);
+      out.push(...rows.filter((r) => num(r.ts) >= sinceMs));
+      if (rows.length < 100) break;
+      const oldest = Math.min(...rows.map((r) => num(r.ts)));
+      if (!(oldest > sinceMs) || oldest === after) break;
+      after = oldest;
+    }
+    return out;
+  }
+
+  /** OKX: `amt` excludes the fee (fee charged separately, verified live) */
   async fetchFlows(sinceMs: number): Promise<FundFlow[]> {
     const [wd, dep] = await Promise.all([
-      this.signedGet<OKXWithdrawal[]>(`/api/v5/asset/withdrawal-history?before=${sinceMs}&limit=100`),
-      this.signedGet<OKXDeposit[]>(`/api/v5/asset/deposit-history?before=${sinceMs}&limit=100`),
+      this.historySince<OKXWithdrawal>('/api/v5/asset/withdrawal-history', sinceMs),
+      this.historySince<OKXDeposit>('/api/v5/asset/deposit-history', sinceMs),
     ]);
     const flows: FundFlow[] = [];
     for (const w of wd) {

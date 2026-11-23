@@ -45,7 +45,8 @@ export interface OptionDetails {
    * Underlying units per 1 contract of `quantity` (OKX BTC-USD options: 0.01). Omitted = 1.
    * PnL per position = Δprice × quantity × contractMultiplier (× underlying price for coin premiums).
    */
-  contractMultiplier?: number;
+  /** null = the venue has a multiplier but it could not be fetched (PnL unknown, never assume 1) */
+  contractMultiplier?: number | null;
 }
 
 // === Config types (loaded from accounts.json) ===

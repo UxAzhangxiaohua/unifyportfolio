@@ -37,7 +37,8 @@ export interface OptionDetails {
   /** Set when premium/prices are quoted in a coin (e.g. BTC) rather than USD */
   premiumCcy?: string;
   /** Underlying units per contract of `quantity` (OKX BTC-USD options: 0.01). Omitted = 1 */
-  contractMultiplier?: number;
+  /** null = the venue has a multiplier but it could not be fetched (PnL unknown, never assume 1) */
+  contractMultiplier?: number | null;
 }
 
 export interface Position {

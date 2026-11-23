@@ -15,9 +15,16 @@ let levels: number[] = DEFAULT_LEVELS;
 const tiers = new Map<string, number>();
 
 export function initAlerts(cfg: AlertsConfig | undefined): void {
-  webhook = cfg?.discordWebhook?.trim() || null;
-  if (Array.isArray(cfg?.marginLevels) && cfg.marginLevels.length) {
-    levels = cfg.marginLevels.filter((n) => typeof n === 'number' && n > 0).sort((a, b) => b - a);
+  const url = cfg?.discordWebhook?.trim() || '';
+  // The example config's placeholder is not a webhook
+  webhook = /^https:\/\/\S+$/.test(url) && !url.includes('YOUR_') ? url : null;
+  if (url && !webhook) console.warn('[alerts] alerts.discordWebhook is not a usable URL (placeholder?) — ignored');
+  levels = DEFAULT_LEVELS;
+  if (Array.isArray(cfg?.marginLevels)) {
+    // Accept numeric strings too ("150"); an unusable list falls back to the defaults
+    const parsed = [...new Set(cfg.marginLevels.map(Number).filter((n) => Number.isFinite(n) && n > 0))].sort((a, b) => b - a);
+    if (parsed.length) levels = parsed;
+    else console.warn(`[alerts] alerts.marginLevels has no valid numbers — using ${DEFAULT_LEVELS.join('/')}`);
   }
   console.log(webhook
     ? `[alerts] Discord margin-level alerts on: < ${levels.join('% / < ')}%`

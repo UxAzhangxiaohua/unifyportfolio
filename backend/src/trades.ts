@@ -42,9 +42,11 @@ function aggregate(positions: Position[]): Array<Position & { side: 'long' | 'sh
     const quantity = g.reduce((s, p) => s + p.quantity, 0);
     const avgPrice = quantity > 0 ? g.reduce((s, p) => s + p.avgPrice * p.quantity, 0) / quantity : g[0].avgPrice;
     const marketValue = g.reduce((s, p) => s + p.marketValue, 0);
-    // CFD quantity is in lots: derive units per lot from notional (USD) ÷ (lots × price)
-    const m = g[0].assetClass === 'cfd' && quantity > 0 && g[0].currentPrice > 0 ? marketValue / (quantity * g[0].currentPrice) : 1;
-    return { ...g[0], side: g[0].side as 'long' | 'short', quantity, avgPrice, marketValue, mult: Number.isFinite(m) && m > 0 ? m : 1 };
+    // CFD quantity is in lots: derive units per lot from notional (USD) ÷ (lots × price).
+    // NaN = unknown this cycle (no price / notional): the caller keeps the last known value.
+    const price = g[0].currentPrice;
+    const m = g[0].assetClass !== 'cfd' ? 1 : quantity > 0 && price > 0 && marketValue > 0 ? marketValue / (quantity * price) : NaN;
+    return { ...g[0], side: g[0].side as 'long' | 'short', quantity, avgPrice, marketValue, mult: Number.isFinite(m) && m > 0 ? m : NaN };
   });
 }
 
@@ -68,46 +70,42 @@ export function trackSnapshot(snapshot: AccountSnapshot): void {
         side: pos.side,
         quantity: pos.quantity,
         avgPrice: pos.avgPrice,
-        lastPrice: pos.currentPrice,
+        lastPrice: pos.currentPrice > 0 ? pos.currentPrice : 0,
         mult: pos.mult,
         firstSeen: now,
       });
-    } else if (pos.quantity < existing.quantity) {
-      // Partial close
-      const closedQty = existing.quantity - pos.quantity;
-      const priceDiff =
-        pos.side === 'long'
-          ? pos.currentPrice - existing.avgPrice
-          : existing.avgPrice - pos.currentPrice;
-      const realizedPnl = priceDiff * closedQty * existing.mult;
-      const pnlPercent = existing.avgPrice !== 0 ? (priceDiff / existing.avgPrice) * 100 : 0;
-      const durationSeconds = Math.floor((Date.now() - new Date(existing.firstSeen).getTime()) / 1000);
-
-      addTrade({
-        id: `${key}:${Date.now()}`,
-        accountId: snapshot.accountId,
-        exchange: snapshot.exchange,
-        symbol: pos.symbol,
-        side: pos.side,
-        entryPrice: existing.avgPrice,
-        exitPrice: pos.currentPrice,
-        quantity: closedQty,
-        realizedPnl,
-        pnlPercent,
-        entryTime: existing.firstSeen,
-        exitTime: now,
-        durationSeconds,
-      });
-
-      existing.quantity = pos.quantity;
-      existing.avgPrice = pos.avgPrice;
-      existing.lastPrice = pos.currentPrice;
-      existing.mult = pos.mult;
     } else {
+      // A cycle without a usable price (no quote) must not become the exit price or the multiplier
+      const price = pos.currentPrice > 0 ? pos.currentPrice : existing.lastPrice;
+      const mult = Number.isFinite(pos.mult) ? pos.mult : existing.mult;
+      if (pos.quantity < existing.quantity && price > 0 && Number.isFinite(mult)) {
+        // Partial close
+        const closedQty = existing.quantity - pos.quantity;
+        const priceDiff = pos.side === 'long' ? price - existing.avgPrice : existing.avgPrice - price;
+        const realizedPnl = priceDiff * closedQty * mult;
+        const pnlPercent = existing.avgPrice !== 0 ? (priceDiff / existing.avgPrice) * 100 : 0;
+        const durationSeconds = Math.floor((Date.now() - new Date(existing.firstSeen).getTime()) / 1000);
+
+        addTrade({
+          id: `${key}:${Date.now()}`,
+          accountId: snapshot.accountId,
+          exchange: snapshot.exchange,
+          symbol: pos.symbol,
+          side: pos.side,
+          entryPrice: existing.avgPrice,
+          exitPrice: price,
+          quantity: closedQty,
+          realizedPnl,
+          pnlPercent,
+          entryTime: existing.firstSeen,
+          exitTime: now,
+          durationSeconds,
+        });
+      }
       existing.quantity = pos.quantity;
       existing.avgPrice = pos.avgPrice;
-      existing.lastPrice = pos.currentPrice;
-      existing.mult = pos.mult;
+      existing.lastPrice = price;
+      existing.mult = mult;
     }
   }
 
@@ -115,6 +113,9 @@ export function trackSnapshot(snapshot: AccountSnapshot): void {
   for (const [key, tp] of tracked) {
     if (tp.accountId !== snapshot.accountId) continue;
     if (currentKeys.has(key)) continue;
+    tracked.delete(key);
+    // Never saw a usable price / multiplier: the PnL would be fiction, so don't record a trade
+    if (!(tp.lastPrice > 0) || !Number.isFinite(tp.mult)) continue;
 
     const priceDiff =
       tp.side === 'long' ? tp.lastPrice - tp.avgPrice : tp.avgPrice - tp.lastPrice;
@@ -137,8 +138,6 @@ export function trackSnapshot(snapshot: AccountSnapshot): void {
       exitTime: new Date().toISOString(),
       durationSeconds,
     });
-
-    tracked.delete(key);
   }
 }
 

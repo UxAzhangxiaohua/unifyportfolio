@@ -187,17 +187,26 @@ export class BybitConnector extends BaseConnector {
       }
 
       const openOptions = (options.list ?? []).filter((p) => num(p.size) !== 0);
-      const tickers = new Map<string, BybitOptionTicker>();
-      await Promise.all(openOptions.map((p) => this.sticky(`Option ticker ${p.symbol}`, warnings, async () => {
-        const t = await this.publicGet<{ list: BybitOptionTicker[] }>('/v5/market/tickers', { category: 'option', symbol: p.symbol });
-        if (t.list?.[0]) tickers.set(p.symbol, t.list[0]);
-      }, undefined, true)));
+      // One sticky key for all tickers (per-symbol keys grew stickyCache forever); the closure
+      // returns the map so a failed cycle serves the last good tickers
+      const tickers = openOptions.length
+        ? await this.sticky('Option tickers', warnings, async () => {
+            const rows = await Promise.all(openOptions.map(async (p) => {
+              const t = await this.publicGet<{ list: BybitOptionTicker[] }>('/v5/market/tickers', { category: 'option', symbol: p.symbol });
+              return [p.symbol, t.list?.[0]] as const;
+            }));
+            return new Map(rows.filter((r): r is readonly [string, BybitOptionTicker] => !!r[1]));
+          }, new Map<string, BybitOptionTicker>(), true)
+        : new Map<string, BybitOptionTicker>();
 
-      await Promise.all(openOptions.filter((p) => !instrumentCache.has(p.symbol)).map((p) => this.sticky(`Option spec ${p.symbol}`, warnings, async () => {
-        const r = await this.publicGet<{ list: BybitInstrument[] }>('/v5/market/instruments-info', { category: 'option', symbol: p.symbol });
-        const i = r.list?.[0];
-        if (i) instrumentCache.set(p.symbol, { expiryTs: num(i.deliveryTime) || null, tickSize: num(i.priceFilter?.tickSize) || null });
-      }, undefined, true)));
+      // Specs are cached for the process lifetime; a failed lookup is simply retried next cycle
+      await Promise.all(openOptions.filter((p) => !instrumentCache.has(p.symbol)).map(async (p) => {
+        try {
+          const r = await this.publicGet<{ list: BybitInstrument[] }>('/v5/market/instruments-info', { category: 'option', symbol: p.symbol });
+          const i = r.list?.[0];
+          if (i) instrumentCache.set(p.symbol, { expiryTs: num(i.deliveryTime) || null, tickSize: num(i.priceFilter?.tickSize) || null });
+        } catch { /* expiry falls back to 08:00 UTC, tick size unknown */ }
+      }));
 
       for (const p of openOptions) {
         const size = num(p.size);

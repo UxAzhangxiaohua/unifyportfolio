@@ -9,6 +9,7 @@ import { BitgetConnector } from './connectors/bitget.js';
 import { MT5Connector } from './connectors/mt5.js';
 import { cacheSet } from './cache.js';
 import { checkMarginAlerts, initAlerts } from './alerts.js';
+import { STALE_MARKER } from './connectors/base.js';
 import { transfersObserve, transfersSince } from './transfers.js';
 
 function createConnector(account: AccountConfig): BaseConnector {
@@ -40,7 +41,11 @@ async function fetchAndCache(connector: BaseConnector, accountId: string): Promi
         return null;
       }),
   ]);
-  if (flows && !snapshot.error) transfersObserve(accountId, flows);
+  // When any balance in this snapshot was served from sticky()'s stale cache (pre-debit), observing a
+  // new withdrawal now would count it twice (stale balance + in transit). Leave the flows for the
+  // next cycle: they are re-fetched (rolling window) and observed once the balances are fresh.
+  const staleBalances = snapshot.warnings?.some((w) => w.includes(STALE_MARKER)) ?? false;
+  if (flows && !snapshot.error && !staleBalances) transfersObserve(accountId, flows);
   const flowErr = flowErrors.get(accountId);
   if (flowErr && !snapshot.error) {
     snapshot.warnings = [...(snapshot.warnings ?? []), `Deposit/withdrawal history: ${flowErr}`.substring(0, 300)];

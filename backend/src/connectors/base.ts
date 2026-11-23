@@ -1,5 +1,8 @@
 import type { AccountConfig, AccountSnapshot, FundFlow, Position } from '../types.js';
 
+/** Warning text marking data served from sticky()'s cache (scheduler.ts checks for it) */
+export const STALE_MARKER = ': using data from ';
+
 /** How long a failed sub-request may be served from its last good result */
 const STICKY_MAX_AGE_MS = 15 * 60_000;
 
@@ -33,7 +36,7 @@ export abstract class BaseConnector {
       const msg = err instanceof Error ? err.message : String(err);
       const prev = this.stickyCache.get(label);
       if (prev && Date.now() - prev.at < STICKY_MAX_AGE_MS) {
-        warnings.push(`${label}: using data from ${Math.round((Date.now() - prev.at) / 1000)}s ago — ${msg}`.substring(0, 300));
+        warnings.push(`${label}${STALE_MARKER}${Math.round((Date.now() - prev.at) / 1000)}s ago — ${msg}`.substring(0, 300));
         return prev.value as T;
       }
       // quiet: product often simply not enabled for the account (e.g. options) — don't nag

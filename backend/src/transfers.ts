@@ -30,8 +30,14 @@ const FIRST_LOOKBACK_MS = 30 * 86_400_000;
 const ROLLING_LOOKBACK_MS = 3 * 86_400_000;
 /** Max time between a withdrawal and the deposit it pairs with */
 const MATCH_WINDOW_MS = 48 * 3_600_000;
-/** An unpaired withdrawal to one of our own addresses counts as in transit for at most this long */
+/** An unpaired withdrawal to one of our exchange deposit addresses counts as in transit for at most this long */
 const TRANSIT_MAX_MS = 24 * 3_600_000;
+/**
+ * Same for an address that is only a self-custody wallet (e.g. the Hyperliquid wallet): funds there
+ * often stay or get spent, so they would inflate the total for a whole day before dropping out.
+ * Onward transfers from it to an exchange normally follow within minutes.
+ */
+const WALLET_TRANSIT_MAX_MS = 2 * 3_600_000;
 /** Deposits may be timestamped slightly before the withdrawal on another venue's clock */
 const CLOCK_SKEW_MS = 10 * 60_000;
 const LIST_DAYS_MS = 14 * 86_400_000;
@@ -98,8 +104,9 @@ function build(now: number): Built {
   const all = [...flows.values()];
   const outs = all.filter((f) => f.direction === 'out').sort((a, b) => a.time - b.time);
   const ins = all.filter((f) => f.direction === 'in' && f.doneSeenAt != null).sort((a, b) => a.time - b.time);
-  const known = new Set(ownAddresses);
-  for (const f of all) if (f.direction === 'in' && f.address) known.add(f.address);
+  // Exchange deposit addresses we have received funds at (a credit there is observable)
+  const depositAddrs = new Set<string>();
+  for (const f of all) if (f.direction === 'in' && f.address) depositAddrs.add(f.address);
 
   const used = new Set<StoredFlow>();
   const views: TransferView[] = [];
@@ -134,8 +141,10 @@ function build(now: number): Built {
       continue;
     }
 
-    const toOwn = !!o.address && known.has(o.address);
-    if (toOwn && now - o.seenAt < TRANSIT_MAX_MS) {
+    const toDeposit = !!o.address && depositAddrs.has(o.address);
+    const toWallet = !toDeposit && !!o.address && ownAddresses.has(o.address);
+    const maxMs = toDeposit ? TRANSIT_MAX_MS : toWallet ? WALLET_TRANSIT_MAX_MS : 0;
+    if (now - o.seenAt < maxMs) {
       events.push({ t: o.seenAt, delta: o.amount });
       views.push({ ...base, state: 'in_transit', amount: o.amount, toAccount: null, arrivedAt: null });
     } else {

@@ -76,7 +76,9 @@ export function OptionExitCalculator({ accounts }: { accounts: AccountSnapshot[]
     // Long → sell to close, shade below estimate so it fills; short → buy to close, shade above
     const limit = est == null ? null : sign > 0 ? floorTo(est * (1 - buffer / 100), tick) : ceilTo(est * (1 + buffer / 100), tick);
     // quantity is in contracts; contractMultiplier converts to underlying units (OKX coin-margined: 0.01 BTC)
-    const pnl = limit == null ? null : (limit - p.avgPrice) * p.quantity * (o.contractMultiplier ?? 1) * sign * (coin ? target : 1);
+    // null multiplier = venue has one but it couldn't be fetched: show no PnL rather than assume 1
+    const pnl = limit == null || o.contractMultiplier === null ? null
+      : (limit - p.avgPrice) * p.quantity * (o.contractMultiplier ?? 1) * sign * (coin ? target : 1);
     const expired = now + hours * 3_600_000 >= exp;
     return { p, o, vol0, vol, tick, sign, est, limit, pnl, expired, priceAt, exp, knownTick: !!o.tickSize };
   });

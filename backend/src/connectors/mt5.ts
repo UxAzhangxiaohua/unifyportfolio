@@ -58,13 +58,17 @@ function runBridge(creds: MT5Credentials): Promise<BridgeSnapshot> {
     const child = spawn(BIN, [], { stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); }, TIMEOUT_MS);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, TIMEOUT_MS);
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
     child.on('error', (e) => { clearTimeout(timer); reject(e); });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
-      if (signal) { reject(new Error(`mt5snap killed (${signal}) — timed out after ${TIMEOUT_MS / 1000}s`)); return; }
+      if (signal) {
+        reject(new Error(timedOut ? `mt5snap timed out after ${TIMEOUT_MS / 1000}s` : `mt5snap killed by ${signal}`));
+        return;
+      }
       let parsed: BridgeSnapshot;
       try {
         parsed = JSON.parse(out.trim().split('\n').pop() || '{}');
@@ -75,6 +79,9 @@ function runBridge(creds: MT5Credentials): Promise<BridgeSnapshot> {
       if (parsed.error || code !== 0) reject(new Error(parsed.error || `mt5snap exit ${code}`));
       else resolvePromise(parsed);
     });
+    // A child that fails to exec (wrong arch, no exec bit) or exits early makes stdin emit EPIPE;
+    // unhandled, that would crash the whole backend. The 'error'/'close' handlers report the failure.
+    child.stdin.on('error', () => { /* reported via child 'error' / 'close' */ });
     // Credentials go over stdin so the password never appears in the process list
     child.stdin.end(JSON.stringify({
       login: String(creds.login).trim(),
@@ -83,6 +90,20 @@ function runBridge(creds: MT5Credentials): Promise<BridgeSnapshot> {
       host: creds.host ?? '',
     }));
   });
+}
+
+/**
+ * The snapshot error is shown on the public page: map it to a fixed message so mtapi errors
+ * that quote the server name or login never leave the server.
+ */
+function publicError(msg: string): string {
+  const m = msg.toLowerCase();
+  if (m.includes('not found at')) return 'MT5 helper binary missing — see server log';
+  if (m.includes('server not found') || m.includes('no access points')) return 'MT5 server not found — check "server" in accounts.json';
+  if (m.includes('authentication') || m.includes('invalid login')) return 'MT5 login rejected — check login / investor password';
+  if (m.includes('timed out') || m.includes('timeout') || m.includes('deadline')) return 'MT5 request timed out';
+  if (m.includes('connection')) return 'MT5 connection failed';
+  return 'MT5 fetch failed — see server log';
 }
 
 export class MT5Connector extends BaseConnector {
@@ -157,8 +178,9 @@ export class MT5Connector extends BaseConnector {
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Full text (may quote the server name / login) stays in the server log only
       console.error(`[mt5] ${this.account.id}: ${msg}`);
-      return this.makeErrorSnapshot(msg);
+      return this.makeErrorSnapshot(publicError(msg));
     }
   }
 
