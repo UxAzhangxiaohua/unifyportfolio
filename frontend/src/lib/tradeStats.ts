@@ -8,10 +8,19 @@ const COMMODITY_ALIASES: Record<string, string> = {
   USOIL: 'WTI', XTIUSD: 'WTI', CL: 'WTI', UKOIL: 'BRENT', XBRUSD: 'BRENT',
 };
 
-/** Group key for per-instrument stats: BTCUSDT / BTC-USDT-SWAP → BTC, options → underlying, commodities merged across venues (MT5 XAUUSDm + XAUUSDT perp + XAUT → XAU) */
+/** Group key for per-instrument stats: BTCUSDT / BTC-USDT-SWAP → BTC, options → underlying, commodities merged across venues (MT5 XAUUSDm + XAUUSDT perp + XAUT → XAU), index CFDs by index (USTEC → NAS100) */
+// Index contracts under different names (MT5 NAS100 vs USTEC on another broker / venue)
+const INDEX_ALIASES: Record<string, string> = {
+  USTEC: 'NAS100', US100: 'NAS100', NDX: 'NAS100', NAS100: 'NAS100',
+  US500: 'US500', SPX500: 'US500',
+  US30: 'US30', DJ30: 'US30',
+};
+
 export function instrumentKey(t: ClosedTrade): string {
   const k = rawInstrumentKey(t);
-  return t.category === 'xau' ? COMMODITY_ALIASES[k] ?? k : k;
+  if (t.category === 'xau') return COMMODITY_ALIASES[k] ?? k;
+  if (t.category === 'stock') return INDEX_ALIASES[k] ?? k;
+  return k;
 }
 
 function rawInstrumentKey(t: ClosedTrade): string {
