@@ -256,7 +256,7 @@ export function TradesHistory() {
                         <td className="font-medium">{t.symbol}</td>
                         <td><ExchangeTag exchange={t.exchange} /></td>
                         <td><SideBadge side={t.side} /></td>
-                        <td className="r num text-text-secondary">{formatPrice(t.entryPrice)}</td>
+                        <td className="r num text-text-secondary">{t.entryPrice != null ? formatPrice(t.entryPrice) : '—'}</td>
                         <td className="r num text-text-secondary">{formatPrice(t.exitPrice)}</td>
                         <td className="r num text-text-secondary">{formatQty(t.quantity)}</td>
                         <td className="r">

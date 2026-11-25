@@ -190,7 +190,8 @@ export interface MetricsResponse {
   maxDrawdown: number;
   maxDrawdownPercent: number;
   totalEquity: number;
-  changes: Record<string, { pnl: number; percent: number } | null>;
+  /** estimated: measured from a reconstructed (pre-history) point */
+  changes: Record<string, { pnl: number; percent: number; estimated?: boolean } | null>;
 }
 
 export type TimePeriod = '1h' | '4h' | '24h' | '1w' | '30d' | 'all';
@@ -205,7 +206,8 @@ export interface ClosedTrade {
   exchange: ExchangeType;
   symbol: string;
   side: 'long' | 'short';
-  entryPrice: number;
+  /** null when unknown (MT5 close whose opening deal is outside the history window) */
+  entryPrice: number | null;
   exitPrice: number;
   quantity: number;
   realizedPnl: number;

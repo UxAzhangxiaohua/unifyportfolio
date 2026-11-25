@@ -325,7 +325,8 @@ export interface ClosedTrade {
   exchange: ExchangeType;
   symbol: string;
   side: 'long' | 'short';
-  entryPrice: number;
+  /** null when unknown (MT5 close whose opening deal is outside the history window) */
+  entryPrice: number | null;
   exitPrice: number;
   quantity: number;
   realizedPnl: number;

@@ -256,6 +256,22 @@ export class BinanceConnector extends BaseConnector {
    * Options: /eapi/v1/userTrades fills with realizedProfit ≠ 0, grouped per order (exercise at
    * expiry is not included).
    */
+  /**
+   * Time-window pagination for endpoints returning ≤ 1000 rows from startTime on: restart at the
+   * last row's time (rows sharing that millisecond may not all have fit; `add` dedupes by id)
+   */
+  private optionsError = '';
+
+  private async pageByTime<T extends { time: number }>(start: number, end: number, get: (start: number) => Promise<T[]>, add: (row: T) => void): Promise<void> {
+    for (let page = 0; page < 50 && start <= end; page++) {
+      const rows = await get(start);
+      for (const r of rows) add(r);
+      if (rows.length < 1000) return;
+      const last = Math.max(...rows.map((r) => r.time));
+      start = last > start ? last : last + 1;
+    }
+  }
+
   async fetchClosedTrades(sinceMs: number): Promise<ClosedTrade[]> {
     const out: ClosedTrade[] = [];
     const now = Date.now();
@@ -280,10 +296,12 @@ export class BinanceConnector extends BaseConnector {
       const meta = await this.futuresMeta().catch(() => new Map<string, { underlyingType: string; sub: string[] }>());
       for (const [symbol, ws] of windows) {
         const fills: BinanceUserTrade[] = [];
+        const seen = new Set<number>();
         for (const w of ws) {
-          fills.push(...await this.signed<BinanceUserTrade[]>(FUTURES_BASE, '/fapi/v1/userTrades', {
-            symbol, startTime: String(w), endTime: String(Math.min(w + WEEK - 1, now)), limit: '1000',
-          }));
+          const end = Math.min(w + WEEK - 1, now);
+          await this.pageByTime(w, end, (s) => this.signed<BinanceUserTrade[]>(FUTURES_BASE, '/fapi/v1/userTrades', {
+            symbol, startTime: String(s), endTime: String(end), limit: '1000',
+          }), (f) => { if (!seen.has(f.id)) { seen.add(f.id); fills.push(f); } });
         }
         const byOrder = new Map<number, BinanceUserTrade[]>();
         for (const f of fills) {
@@ -317,7 +335,18 @@ export class BinanceConnector extends BaseConnector {
     }
 
     // 3. Options (an account without options access just has none)
-    const opt = await this.signed<BinanceOptionTrade[]>(OPTIONS_BASE, '/eapi/v1/userTrades', { startTime: String(sinceMs), endTime: String(now), limit: '1000' }).catch(() => []);
+    const opt: BinanceOptionTrade[] = [];
+    const optSeen = new Set<string>();
+    // The options endpoint rejects windows reaching past 90 days (-6073); `sinceMs` is often exactly 90 d
+    const optSince = Math.max(sinceMs, now - 89 * 86_400_000);
+    await this.pageByTime(optSince, now, (s) => this.signed<BinanceOptionTrade[]>(OPTIONS_BASE, '/eapi/v1/userTrades', { startTime: String(s), endTime: String(now), limit: '1000' }),
+      (f) => { const k = String(f.id ?? f.tradeId ?? `${f.orderId}:${f.time}:${f.price}:${f.quantity}`); if (!optSeen.has(k)) { optSeen.add(k); opt.push(f); } },
+    ).catch((err) => {
+      // Accounts without options access fail here every time: log each distinct error once
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg !== this.optionsError) console.warn(`[binance] ${this.account.id}: option trades unavailable: ${msg.substring(0, 200)}`);
+      this.optionsError = msg;
+    });
     const optByOrder = new Map<number, BinanceOptionTrade[]>();
     for (const f of opt) {
       if (num(f.realizedProfit) === 0) continue;
@@ -396,10 +425,12 @@ async function binanceFundingQuotes(): Promise<Map<string, FundingQuote>> {
 
 interface BinanceIncome { symbol: string; incomeType: string; income: string; time: number; tradeId?: string }
 interface BinanceUserTrade {
+  id: number;
   symbol: string; orderId: number; side: 'BUY' | 'SELL'; positionSide: 'BOTH' | 'LONG' | 'SHORT';
   price: string; qty: string; realizedPnl: string; commission: string; commissionAsset: string; time: number;
 }
 interface BinanceOptionTrade {
+  id?: number; tradeId?: number;
   symbol: string; orderId: number; side: 'BUY' | 'SELL'; price: string; quantity: string; fee: string; realizedProfit: string; time: number;
 }
 

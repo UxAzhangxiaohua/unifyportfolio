@@ -47,7 +47,8 @@ export function tvSymbol(exchange: ExchangeType, symbol: string, assetClass?: st
     }
     case 'hyperliquid':
       // HIP-3 dex assets (xyz:NVDA) have no direct TradingView listing
-      return /:/.test(symbol) ? null : `HYPERLIQUID:${s.replace(/^K(?=[A-Z])/, '')}USDC.P`;
+      // TradingView keeps the k of ×1000 coins (kPEPE → KPEPEUSDC.P), so the name is used as is
+      return /:/.test(symbol) ? null : `HYPERLIQUID:${s}USDC.P`;
     default: return null;
   }
 }

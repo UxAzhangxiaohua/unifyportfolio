@@ -291,8 +291,19 @@ export class BybitConnector extends BaseConnector {
 
   /** On-chain + off-chain withdrawals and on-chain deposits. Query window is capped at 7 days. */
   async fetchFlows(sinceMs: number, untilMs = Date.now()): Promise<FundFlow[]> {
-    const endTime = untilMs;
-    const range = { startTime: String(Math.max(sinceMs, endTime - 7 * 86_400_000 + 60_000)), endTime: String(endTime), limit: '50' };
+    // ≤ 7 days per query
+    sinceMs = Math.max(sinceMs, untilMs - 7 * 86_400_000 + 60_000);
+    // The record endpoints have no usable cursor here: a full page means more rows in the window,
+    // so split it in half until every page is complete
+    const { flows, full } = await this.flowsPage(sinceMs, untilMs);
+    if (!full || untilMs - sinceMs < 60_000) return flows;
+    const mid = Math.floor((sinceMs + untilMs) / 2);
+    return [...await this.fetchFlows(sinceMs, mid), ...await this.fetchFlows(mid + 1, untilMs)];
+  }
+
+  private async flowsPage(sinceMs: number, untilMs: number): Promise<{ flows: FundFlow[]; full: boolean }> {
+    const LIMIT = 50;
+    const range = { startTime: String(sinceMs), endTime: String(untilMs), limit: String(LIMIT) };
     const [wd, dep] = await Promise.all([
       this.signedGet<{ rows: BybitWithdrawal[] }>('/v5/asset/withdraw/query-record', { ...range, withdrawType: '2' }),
       this.signedGet<{ rows: BybitDeposit[] }>('/v5/asset/deposit/query-record', range),
@@ -320,7 +331,7 @@ export class BybitConnector extends BaseConnector {
         time: num(d.successAt), doneTime: status === 'done' ? num(d.successAt) || null : null, status,
       });
     }
-    return flows;
+    return { flows, full: (wd.rows ?? []).length >= LIMIT || (dep.rows ?? []).length >= LIMIT };
   }
 
   /**
