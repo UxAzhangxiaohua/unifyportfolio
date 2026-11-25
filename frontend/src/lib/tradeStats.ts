@@ -1,9 +1,30 @@
 import type { ClosedTrade } from '../types';
 import { baseSymbol } from './exposure';
 
-/** Group key for per-instrument stats: XAUUSDm → XAUUSD, BTCUSDT / BTC-USDT-SWAP → BTC, options → underlying */
+// Commodity contracts on different venues → one row: MT5 XAUUSD, XAUUSDT perp (→ XAU), XAUT, PAXG
+const COMMODITY_ALIASES: Record<string, string> = {
+  XAUUSD: 'XAU', XAUT: 'XAU', PAXG: 'XAU', GOLD: 'XAU',
+  XAGUSD: 'XAG', SILVER: 'XAG',
+  USOIL: 'WTI', XTIUSD: 'WTI', CL: 'WTI', UKOIL: 'BRENT', XBRUSD: 'BRENT',
+};
+
+/** Group key for per-instrument stats: BTCUSDT / BTC-USDT-SWAP → BTC, options → underlying, commodities merged across venues (MT5 XAUUSDm + XAUUSDT perp + XAUT → XAU), index CFDs by index (USTEC → NAS100) */
+// Index contracts under different names (MT5 NAS100 vs USTEC on another broker / venue)
+const INDEX_ALIASES: Record<string, string> = {
+  USTEC: 'NAS100', US100: 'NAS100', NDX: 'NAS100', NAS100: 'NAS100',
+  US500: 'US500', SPX500: 'US500',
+  US30: 'US30', DJ30: 'US30',
+};
+
 export function instrumentKey(t: ClosedTrade): string {
-  if (t.exchange === 'mt5') return t.symbol.replace(/\.[A-Za-z0-9]+$/, '').replace(/[a-z]+$/, '') || t.symbol;
+  const k = rawInstrumentKey(t);
+  if (t.category === 'xau') return COMMODITY_ALIASES[k] ?? k;
+  if (t.category === 'stock') return INDEX_ALIASES[k] ?? k;
+  return k;
+}
+
+function rawInstrumentKey(t: ClosedTrade): string {
+  if (t.exchange === 'mt5') return t.symbol.replace(/\.[A-Za-z0-9]+$/, '').replace(/[a-z]+$/, '').toUpperCase() || t.symbol;
   // Options: one group per underlying (BTC17NOV2665000P, BTC-USD-251128-90000-C → BTC)
   if (t.category === 'option') return t.symbol.toUpperCase().match(/^[A-Z]+/)?.[0] ?? t.symbol;
   // Scaled meme contracts: Binance 1000PEPE, Hyperliquid kPEPE → PEPE

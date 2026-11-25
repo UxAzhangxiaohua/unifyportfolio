@@ -20,10 +20,10 @@ const RANGES: { key: Range; label: () => string; ms: number }[] = [
 ];
 const RANGE_KEY = 'unify.tradesRange';
 
-// XAU = gold (incl. gold-backed tokens; any other commodity / FX would land here too);
+// Commodity (key 'xau' in the data): gold incl. gold-backed tokens, silver, oil, FX;
 // Stock includes index contracts such as NAS100 / USTEC
 const CATEGORIES: { key: TradeCategory; label: () => string; hint: () => string }[] = [
-  { key: 'xau', label: () => 'XAU', hint: () => tr('黄金：XAUUSD、XAUT、PAXG 等', 'Gold: XAUUSD, XAUT, PAXG, …') },
+  { key: 'xau', label: () => 'Commodity', hint: () => tr('大宗商品：黄金（XAUUSD、XAUT、PAXG 等）、白银、原油等', 'Commodities: gold (XAUUSD, XAUT, PAXG, …), silver, oil, …') },
   { key: 'stock', label: () => 'Stock', hint: () => tr('股票、ETF 与股指合约（NAS100、USTEC 等）', 'Stocks, ETFs and index contracts (NAS100, USTEC, …)') },
   { key: 'crypto', label: () => 'Crypto', hint: () => tr('加密货币合约', 'Crypto contracts') },
   { key: 'option', label: () => tr('期权', 'Options'), hint: () => tr('期权', 'Options') },
