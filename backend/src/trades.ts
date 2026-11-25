@@ -64,7 +64,10 @@ export function tradesInit(): void {
 function normalize(t: ClosedTrade & { exitReason?: unknown; plan?: unknown; rMultiple?: unknown; category?: string }): ClosedTrade {
   const { exitReason: _r, plan: _p, rMultiple: _m, ...rest } = t;
   const category = (rest.category as string) === 'commodity' ? 'xau' : rest.category;
-  return { ...rest, category: (category as ClosedTrade['category']) ?? guessCategory(rest.symbol, rest.exchange === 'mt5' ? 'cfd' : undefined) };
+  // MT5 categories are always the name-based guess (no venue metadata), so re-guess stored rows:
+  // a fix to guessCategory (e.g. oil CFDs once filed as stock) then applies to past trades too
+  if (rest.exchange === 'mt5') return { ...rest, category: guessCategory(rest.symbol, 'cfd') };
+  return { ...rest, category: (category as ClosedTrade['category']) ?? guessCategory(rest.symbol) };
 }
 
 // ---------------------------------------------------------------------------------------------

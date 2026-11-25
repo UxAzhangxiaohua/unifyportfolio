@@ -134,7 +134,7 @@ const ALIASES: Record<string, string> = {
   USTEC: 'NAS100', US100: 'NAS100', NDX: 'NAS100', NAS100: 'NAS100',
   US500: 'US500', SPX500: 'US500',
   US30: 'US30', DJ30: 'US30',
-  USOIL: 'WTI', XTIUSD: 'WTI', UKOIL: 'BRENT', XBRUSD: 'BRENT',
+  USOIL: 'WTI', XTIUSD: 'WTI', USOUSD: 'WTI', UKOIL: 'BRENT', XBRUSD: 'BRENT', UKOUSD: 'BRENT',
 };
 
 /** MT5 suffixes (XAUUSDm, US500.cash) stripped; dated futures merged with their perp */

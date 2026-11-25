@@ -244,7 +244,10 @@ export function TradesHistory() {
                         <td className="r num text-text-secondary">{formatQty(t.quantity)}</td>
                         <td className="r">
                           <div className={`num ${win ? 'text-profit' : 'text-loss'}`}>{signedUsd(t.realizedPnl)}</div>
-                          <div className={`num text-[11px] opacity-70 ${win ? 'text-profit' : 'text-loss'}`}>{win ? '+' : ''}{t.pnlPercent.toFixed(2)}%</div>
+                          {/* Price move % (sign of its own: net PnL can differ by fees / swap); none without an entry price */}
+                          {t.entryPrice != null && (
+                            <div className={`num text-[11px] opacity-70 ${pnlClass(t.pnlPercent)}`}>{t.pnlPercent > 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}%</div>
+                          )}
                         </td>
                         <td className="r num text-text-muted">{formatDuration(t.durationSeconds)}</td>
                       </tr>
@@ -382,7 +385,8 @@ function CategoryTree({ trades, category, instrument, hasOptions, onCategory, on
                     <td>
                       <button className="inline-block w-4 text-text-muted hover:text-text-primary" aria-expanded={open}
                         onClick={(e) => { e.stopPropagation(); toggle(c.key); }}>{open ? '▾' : '▸'}</button>
-                      <span className="font-semibold">{row.key}</span>
+                      {/* label at render time: row.key is memoised and would keep the old language */}
+                      <span className="font-semibold">{c.label()}</span>
                       <span className="ml-2 text-[11px] text-text-muted">{tr(`${items.length} 个品种`, `${items.length} instruments`)}</span>
                     </td>
                     {cells(row, maxCat)}

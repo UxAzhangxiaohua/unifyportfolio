@@ -56,14 +56,43 @@ export function tvSymbol(exchange: ExchangeType, symbol: string, assetClass?: st
 // ---------------------------------------------------------------------------------------------
 // Trades
 
-function instrumentKey(t: ClosedTrade): string {
-  if (t.exchange === 'mt5') return t.symbol.replace(/\.[A-Za-z0-9]+$/, '').replace(/[a-z]+$/, '') || t.symbol;
-  let s = t.symbol.toUpperCase().replace(/^[A-Z0-9]+:/, '');
+// Same grouping as the trades page (keep in sync with frontend lib/tradeStats.ts), so
+// get_trade_stats by instrument matches what the user sees there
+const COMMODITY_ALIASES: Record<string, string> = {
+  XAUUSD: 'XAU', XAUT: 'XAU', PAXG: 'XAU', GOLD: 'XAU',
+  XAGUSD: 'XAG', SILVER: 'XAG',
+  USOIL: 'WTI', XTIUSD: 'WTI', USOUSD: 'WTI', CL: 'WTI', UKOIL: 'BRENT', XBRUSD: 'BRENT', UKOUSD: 'BRENT',
+};
+const INDEX_ALIASES: Record<string, string> = {
+  USTEC: 'NAS100', US100: 'NAS100', NDX: 'NAS100', NAS100: 'NAS100',
+  US500: 'US500', SPX500: 'US500',
+  US30: 'US30', DJ30: 'US30',
+};
+
+function baseSymbol(symbol: string): string {
+  let s = symbol.toUpperCase().replace(/^[A-Z0-9]+:/, '');
   s = s.replace(/-(USDT|USDC|USD)-SWAP$/, '').replace(/[-_]?(USDT|USDC|USD)?[-_]?PERP$/, '');
   const dated = s.match(/^(.*?)[-_]?(USDT|USDC|USD)?[-_](\d{6}|\d{1,2}[A-Z]{3}\d{2})$/);
   if (dated) return `${dated[1].replace(/[-_]/g, '')}-${dated[3]}`;
-  return s.replace(/[-_]?(USDT|USDC|USD)$/, '').replace(/[-_]/g, '') || t.symbol;
+  return s.replace(/[-_]?(USDT|USDC|USD)$/, '').replace(/[-_]/g, '') || symbol;
 }
+
+/** MT5 suffix stripped, options by underlying, 1000PEPE / HL kPEPE → PEPE, gold / oil / index names merged across venues */
+function instrumentKey(t: ClosedTrade): string {
+  let k: string;
+  if (t.exchange === 'mt5') k = t.symbol.replace(/\.[A-Za-z0-9]+$/, '').replace(/[a-z]+$/, '').toUpperCase() || t.symbol;
+  else if (t.category === 'option') k = t.symbol.toUpperCase().match(/^[A-Z]+/)?.[0] ?? t.symbol;
+  else k = baseSymbol(t.exchange === 'hyperliquid' ? t.symbol.replace(/^k(?=[A-Z])/, '') : t.symbol).replace(/^1000+(?=[A-Z])/, '');
+  if (t.category === 'xau') return COMMODITY_ALIASES[k] ?? k;
+  if (t.category === 'stock') return INDEX_ALIASES[k] ?? k;
+  return k;
+}
+
+/** Natural order of the time buckets (alphabetical would give Fri, Mon, … / <5m, 12-48h, 2-12h, …) */
+const BUCKET_ORDER: Record<string, string[]> = {
+  weekday: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+  holding_time: ['<5m', '5-30m', '30m-2h', '2-12h', '12-48h', '>48h', 'unknown'],
+};
 
 function summarize(list: ClosedTrade[]) {
   let wins = 0, losses = 0, gw = 0, gl = 0, fees = 0, hold = 0, holdN = 0;
@@ -309,7 +338,10 @@ function buildServer(): McpServer {
       groups.set(k, [...(groups.get(k) ?? []), t]);
     }
     const rows = [...groups.entries()].map(([key, ts]) => ({ key, ...summarize(ts) }));
-    rows.sort((a, b) => ['weekday', 'hour', 'day', 'holding_time'].includes(group_by) ? a.key.localeCompare(b.key) : (b.pnl ?? 0) - (a.pnl ?? 0));
+    const order = BUCKET_ORDER[group_by];
+    rows.sort((a, b) => order ? order.indexOf(a.key) - order.indexOf(b.key)
+      : group_by === 'hour' || group_by === 'day' ? a.key.localeCompare(b.key)
+      : (b.pnl ?? 0) - (a.pnl ?? 0));
     return json({ from, to, groupBy: group_by, tz, overall: summarize(list), groups: rows });
   });
 

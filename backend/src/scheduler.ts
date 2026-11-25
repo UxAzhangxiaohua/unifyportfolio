@@ -28,8 +28,27 @@ function createConnector(account: AccountConfig): BaseConnector {
 }
 
 const flowErrors = new Map<string, string>();
+const fetchRunning = new Set<string>();
 
+/**
+ * One poll at a time per account: a venue request that hangs (no client timeout; undici gives up
+ * after minutes) must not stack further polls, and an old poll finishing late must not overwrite
+ * the newer snapshot / observe its flows out of order.
+ */
 async function fetchAndCache(connector: BaseConnector, accountId: string): Promise<void> {
+  if (fetchRunning.has(accountId)) return;
+  fetchRunning.add(accountId);
+  try {
+    await fetchAndCacheOnce(connector, accountId);
+  } catch (err) {
+    // Called fire-and-forget from timers: never let it become an unhandled rejection
+    console.error(`[scheduler] ${accountId}: ${err instanceof Error ? err.message : err}`);
+  } finally {
+    fetchRunning.delete(accountId);
+  }
+}
+
+async function fetchAndCacheOnce(connector: BaseConnector, accountId: string): Promise<void> {
   // Balances and deposit/withdrawal records are fetched together so a debit and its withdrawal
   // record are observed in the same cycle (see transfers.ts)
   const [snapshot, flows] = await Promise.all([

@@ -77,7 +77,9 @@ export function RiskKpis({ accounts }: { accounts: AccountSnapshot[] }) {
   const opts = all.filter((p) => p.assetClass === 'option');
   const upl = risks.reduce((s, r) => s + r.upl, 0);
   const optUpl = opts.reduce((s, p) => s + p.unrealizedPnl, 0);
-  const perpUpl = perpG.upl - optUpl;
+  // Straight from the perps: sumGroup's perp upl folds in options only for accounts that also
+  // carry perp exposure / margin, so subtracting all options from it was wrong for options-only accounts
+  const perpUpl = perps.reduce((s, p) => s + p.unrealizedPnl, 0);
   const ds = opts.map(dollarDelta).filter((d): d is number => d != null);
   const optDelta = ds.length ? ds.reduce((s, d) => s + d, 0) : null;
   const paid = perps.filter((p) => p.fundingPnl != null);

@@ -5,7 +5,7 @@ import { baseSymbol } from './exposure';
 const COMMODITY_ALIASES: Record<string, string> = {
   XAUUSD: 'XAU', XAUT: 'XAU', PAXG: 'XAU', GOLD: 'XAU',
   XAGUSD: 'XAG', SILVER: 'XAG',
-  USOIL: 'WTI', XTIUSD: 'WTI', CL: 'WTI', UKOIL: 'BRENT', XBRUSD: 'BRENT',
+  USOIL: 'WTI', XTIUSD: 'WTI', USOUSD: 'WTI', CL: 'WTI', UKOIL: 'BRENT', XBRUSD: 'BRENT', UKOUSD: 'BRENT',
 };
 
 /** Group key for per-instrument stats: BTCUSDT / BTC-USDT-SWAP → BTC, options → underlying, commodities merged across venues (MT5 XAUUSDm + XAUUSDT perp + XAUT → XAU), index CFDs by index (USTEC → NAS100) */

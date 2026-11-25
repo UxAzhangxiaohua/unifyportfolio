@@ -11,6 +11,9 @@ const COMMODITIES = new Set([
   'XAU', 'XAG', 'XPT', 'XPD', 'XAUT', 'PAXG', 'GOLD', 'SILVER', 'PLATINUM', 'PALLADIUM', 'COPPER', 'XCU', 'ALUMINIUM', 'ALUMINUM',
   'NICKEL', 'ZINC', 'WTI', 'BRENT', 'USOIL', 'UKOIL', 'OIL', 'CL', 'BZ', 'NG', 'XNG', 'NATGAS', 'NGAS', 'GAS', 'COCOA', 'COFFEE',
   'SUGAR', 'WHEAT', 'CORN', 'SOYBEAN', 'COTTON', 'URANIUM',
+  // CFD oil names whose base isn't a commodity word: XTIUSD / XBRUSD, Bybit TradFi USOUSD / UKOUSD
+  // (full names only — bare USO is also the oil-fund ETF ticker)
+  'XTI', 'XBR', 'USOUSD', 'UKOUSD',
 ]);
 const FX = new Set(['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD', 'SGD', 'HKD', 'CNH', 'SEK', 'NOK', 'DKK', 'PLN', 'ZAR', 'MXN', 'TRY', 'HUF', 'CZK', 'BRL', 'KRW', 'INR']);
 /** Stock indices (CFD / HIP-3 names) — grouped with stocks */
