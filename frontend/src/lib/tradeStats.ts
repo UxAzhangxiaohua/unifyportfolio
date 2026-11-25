@@ -1,10 +1,14 @@
 import type { ClosedTrade } from '../types';
 import { baseSymbol } from './exposure';
 
-/** Group key for per-instrument stats: XAUUSDm → XAUUSD, BTCUSDT / BTC-USDT-SWAP → BTC */
+/** Group key for per-instrument stats: XAUUSDm → XAUUSD, BTCUSDT / BTC-USDT-SWAP → BTC, options → underlying */
 export function instrumentKey(t: ClosedTrade): string {
   if (t.exchange === 'mt5') return t.symbol.replace(/\.[A-Za-z0-9]+$/, '').replace(/[a-z]+$/, '') || t.symbol;
-  return baseSymbol(t.symbol);
+  // Options: one group per underlying (BTC17NOV2665000P, BTC-USD-251128-90000-C → BTC)
+  if (t.category === 'option') return t.symbol.toUpperCase().match(/^[A-Z]+/)?.[0] ?? t.symbol;
+  // Scaled meme contracts: Binance 1000PEPE, Hyperliquid kPEPE → PEPE
+  const raw = t.exchange === 'hyperliquid' ? t.symbol.replace(/^k(?=[A-Z])/, '') : t.symbol;
+  return baseSymbol(raw).replace(/^1000+(?=[A-Z])/, '');
 }
 
 export interface Summary {
