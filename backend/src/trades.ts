@@ -138,15 +138,17 @@ export function tradesObserveMt5(
     const e = entries.get(pk);
     const o = openSeen.get(pk);
     // Entry deal older than the queried window: fall back to the position's open price
-    const entryPrice = e?.price ?? o?.openPrice;
-    if (!(entryPrice && entryPrice > 0)) continue;
+    // Unknown when the opening deal is older than the window and the position was never seen open
+    // here: the trade is still recorded (its PnL comes from the deal), without entry price / time
+    const ep = e?.price ?? o?.openPrice;
+    const entryPrice = ep && ep > 0 ? ep : null;
     // Closing a long is a sell
     const side: 'long' | 'short' = e?.side ?? o?.side ?? (d.side === 'sell' ? 'long' : 'short');
-    const entryTime = e?.time ?? o?.firstSeen ?? d.time;
+    const entryTime = e?.time ?? o?.firstSeen ?? null;
     // Opening fees, pro rata to the closed volume
     const entryFees = e && e.volume > 0 ? e.fees * Math.min(1, d.volume / e.volume) : 0;
     const fees = d.feesUsd + entryFees;
-    const priceDiff = side === 'long' ? d.price - entryPrice : entryPrice - d.price;
+    const priceDiff = entryPrice == null ? 0 : side === 'long' ? d.price - entryPrice : entryPrice - d.price;
 
     addTrade({
       id,
@@ -158,10 +160,10 @@ export function tradesObserveMt5(
       exitPrice: d.price,
       quantity: d.volume,
       realizedPnl: d.profitUsd + fees,
-      pnlPercent: (priceDiff / entryPrice) * 100,
-      entryTime: new Date(entryTime).toISOString(),
+      pnlPercent: entryPrice == null ? 0 : (priceDiff / entryPrice) * 100,
+      entryTime: entryTime == null ? null : new Date(entryTime).toISOString(),
       exitTime: new Date(d.time).toISOString(),
-      durationSeconds: Math.max(0, Math.floor((d.time - entryTime) / 1000)),
+      durationSeconds: entryTime == null ? null : Math.max(0, Math.floor((d.time - entryTime) / 1000)),
       category: guessCategory(d.symbol, 'cfd'),
       source: 'venue',
       fees,
@@ -209,6 +211,13 @@ export function tradesObserveVenue(accountId: string, list: ClosedTrade[], since
   }
   for (const t of list) {
     if (!(Number.isFinite(t.realizedPnl) && Date.parse(t.exitTime) > 0)) continue;
+    // Venue records only grow (more fills of the same order, more partial closes of the same
+    // position). A smaller one means the query window started after the order's first fills:
+    // keep the complete stored record instead of overwriting it with that fragment.
+    if (tradeIds.has(t.id)) {
+      const prev = trades.find((x) => x.id === t.id);
+      if (prev && t.quantity < prev.quantity * (1 - 1e-9)) continue;
+    }
     upsertTrade(normalize(t));
   }
   if (sinceMs != null) coverageMark('trades', accountId, sinceMs);
@@ -268,12 +277,13 @@ function aggregate(positions: Position[]): Array<Position & { side: 'long' | 'sh
 
 function inferredTrade(key: string, t: Omit<ClosedTrade, 'id' | 'realizedPnl' | 'pnlPercent' | 'durationSeconds' | 'source'>, mult: number): ClosedTrade {
   t = { ...t, category: t.category ?? guessCategory(t.symbol) };
-  const priceDiff = t.side === 'long' ? t.exitPrice - t.entryPrice : t.entryPrice - t.exitPrice;
+  const entry = t.entryPrice ?? 0;
+  const priceDiff = t.side === 'long' ? t.exitPrice - entry : entry - t.exitPrice;
   return {
     ...t,
     id: `${key}:${Date.now()}`,
     realizedPnl: priceDiff * t.quantity * mult,
-    pnlPercent: t.entryPrice !== 0 ? (priceDiff / t.entryPrice) * 100 : 0,
+    pnlPercent: entry !== 0 ? (priceDiff / entry) * 100 : 0,
     durationSeconds: t.entryTime ? Math.floor((Date.parse(t.exitTime) - Date.parse(t.entryTime)) / 1000) : null,
     source: 'inferred',
   };

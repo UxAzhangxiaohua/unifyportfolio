@@ -190,12 +190,16 @@ export class HyperliquidConnector extends BaseConnector {
    */
   async fetchClosedTrades(sinceMs: number): Promise<ClosedTrade[]> {
     const fills: HLFill[] = [];
+    const seen = new Set<number>();
     let start = sinceMs;
-    for (let page = 0; page < 20; page++) {
+    for (let page = 0; page < 30; page++) {
       const batch = await this.post<HLFill[]>({ type: 'userFillsByTime', user: this.address, startTime: start, aggregateByTime: false });
-      fills.push(...batch);
+      for (const f of batch) if (!seen.has(f.tid)) { seen.add(f.tid); fills.push(f); }
       if (batch.length < 2000) break;
-      start = batch[batch.length - 1].time + 1;
+      // Restart at the last fill's millisecond (not +1): fills sharing it may not all have fit.
+      // A page that is entirely one millisecond can't advance otherwise.
+      const last = batch[batch.length - 1].time;
+      start = last > start ? last : last + 1;
     }
     const groups = new Map<string, HLFill[]>();
     for (const f of fills) {
@@ -308,7 +312,7 @@ export class HyperliquidConnector extends BaseConnector {
 
 interface HLFill {
   coin: string; px: string; sz: string; side: 'A' | 'B'; time: number; startPosition: string; dir: string;
-  closedPnl: string; oid: number; fee: string; liquidation?: unknown;
+  closedPnl: string; oid: number; tid: number; fee: string; liquidation?: unknown;
 }
 /** HIP-3 builder dexes ("xyz:NVDA") list stocks, indices and a few commodities; the main dex is crypto */
 function hlCategory(coin: string): TradeCategory {

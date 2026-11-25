@@ -22,10 +22,17 @@ export const BACKFILL_DAYS = 90;
 type Kind = 'trades' | 'flows';
 
 const coverCache = new Map<string, number | null>();
+/**
+ * Bump to force one full re-read of that history after an upgrade (stored markers are keyed by
+ * version). v2: paging fixes (Binance fills / options, HL fills, Bybit / Bitget flows) can find
+ * records the earlier reads missed.
+ */
+const COVER_VERSION: Record<Kind, number> = { trades: 2, flows: 2 };
+const coverKey = (kind: Kind, accountId: string) => `cover:${kind}:v${COVER_VERSION[kind]}:${accountId}`;
 
 /** Oldest time (ms) from which this kind of history is complete for the account; null = unknown */
 export function coverageGet(kind: Kind, accountId: string): number | null {
-  const k = `cover:${kind}:${accountId}`;
+  const k = coverKey(kind, accountId);
   if (!coverCache.has(k)) {
     const v = metaGet(k);
     coverCache.set(k, v != null && Number.isFinite(Number(v)) ? Number(v) : null);
@@ -36,8 +43,8 @@ export function coverageGet(kind: Kind, accountId: string): number | null {
 export function coverageMark(kind: Kind, accountId: string, fromMs: number): void {
   const prev = coverageGet(kind, accountId);
   if (prev != null && prev <= fromMs) return;
-  coverCache.set(`cover:${kind}:${accountId}`, fromMs);
-  metaSet(`cover:${kind}:${accountId}`, String(Math.floor(fromMs)));
+  coverCache.set(coverKey(kind, accountId), fromMs);
+  metaSet(coverKey(kind, accountId), String(Math.floor(fromMs)));
 }
 
 /** Venue account-value history (ms, USD), oldest first */

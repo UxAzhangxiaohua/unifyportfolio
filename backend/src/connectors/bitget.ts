@@ -419,7 +419,17 @@ export class BitgetConnector extends BaseConnector {
    * (same field semantics assumed; not verified against a classic account).
    */
   async fetchFlows(sinceMs: number, untilMs = Date.now()): Promise<FundFlow[]> {
-    const params = { startTime: String(sinceMs), endTime: String(untilMs), limit: '100' };
+    // The record endpoints have no usable cursor here: a full page means more rows in the window,
+    // so split it in half until every page is complete
+    const { flows, full } = await this.flowsPage(sinceMs, untilMs);
+    if (!full || untilMs - sinceMs < 60_000) return flows;
+    const mid = Math.floor((sinceMs + untilMs) / 2);
+    return [...await this.fetchFlows(sinceMs, mid), ...await this.fetchFlows(mid + 1, untilMs)];
+  }
+
+  private async flowsPage(sinceMs: number, untilMs: number): Promise<{ flows: FundFlow[]; full: boolean }> {
+    const LIMIT = 100;
+    const params = { startTime: String(sinceMs), endTime: String(untilMs), limit: String(LIMIT) };
     let unified = this.unified;
     let rows: [BitgetFlowRow[], BitgetFlowRow[]];
     if (unified !== true) {
@@ -466,7 +476,7 @@ export class BitgetConnector extends BaseConnector {
         });
       }
     }
-    return flows;
+    return { flows, full: (wd?.length ?? 0) >= LIMIT || (dep?.length ?? 0) >= LIMIT };
   }
 
   /** Current funding rate + next payment for perps (public endpoint, per symbol) */

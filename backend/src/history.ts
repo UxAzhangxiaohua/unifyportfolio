@@ -127,8 +127,10 @@ function rawSeries(): EquityPoint[] {
     return total === p.total && accounts === p.accounts && off === p.off ? p : { ...p, total, accounts, off };
   });
 
-  // Synthetic points before the first sample, once every account has an estimate there
-  if (!first.size || est.size < first.size) return recorded;
+  // Synthetic points before the first sample. Accounts without an estimate (no longer configured,
+  // MT5 deal history unavailable this run, …) are held at their first recorded value there, as on
+  // recorded points, instead of suppressing the whole reconstruction
+  if (!est.size) return recorded;
   const start = Math.max(...[...est.values()].map((e) => Math.ceil(e.from / 1000)));
   const end = list[0].t;
   const synth: EquityPoint[] = [];
@@ -320,7 +322,8 @@ export interface MetricsResponse {
   maxDrawdown: number;
   maxDrawdownPercent: number;
   totalEquity: number;
-  changes: Record<string, { pnl: number; percent: number } | null>;
+  /** estimated: the reference point is a reconstructed (pre-history) estimate */
+  changes: Record<string, { pnl: number; percent: number; estimated?: boolean } | null>;
 }
 
 export function metricsGet(): MetricsResponse {
@@ -334,7 +337,9 @@ export function metricsGet(): MetricsResponse {
 
   // Drawdown and period changes use the full (persisted + session) series;
   // Sharpe uses only the evenly spaced 30s session samples.
-  const all = series();
+  // Drawdown on recorded samples only; period changes may reach back into the reconstruction (flagged)
+  const withEst = series();
+  const all = withEst.filter((p) => !p.est);
   if (all.length < 2) return empty;
 
   const currentEquity = all[all.length - 1].total;
@@ -377,17 +382,19 @@ export function metricsGet(): MetricsResponse {
 
   // Period changes
   const now = Math.floor(Date.now() / 1000);
-  const changes: Record<string, { pnl: number; percent: number } | null> = {};
+  const changes: MetricsResponse['changes'] = {};
 
   for (const [period, seconds] of Object.entries(PERIOD_SECONDS)) {
     const cutoff = now - seconds;
-    const closest = all.find((p) => p.t >= cutoff);
-    if (closest) {
+    const closest = withEst.find((p) => p.t >= cutoff);
+    // History must actually reach back to the period start (within a 30-min sample / 2 h estimate step)
+    if (closest && closest.t - cutoff <= (closest.est ? 2 * BACKFILL_STEP_S : PERSIST_EVERY_S + 60)) {
       const pnl = currentEquity - closest.total;
       const percent = closest.total > 0 ? (pnl / closest.total) * 100 : 0;
       changes[period] = {
         pnl: Math.round(pnl * 100) / 100,
         percent: Math.round(percent * 100) / 100,
+        ...(closest.est ? { estimated: true } : {}),
       };
     } else {
       changes[period] = null;

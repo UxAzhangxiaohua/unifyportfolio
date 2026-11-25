@@ -29,8 +29,9 @@ function root(symbol: string): string {
 export function guessCategory(symbol: string, assetClass?: AssetClass): TradeCategory {
   if (assetClass === 'option') return 'option';
   const s = root(symbol);
-  // Leading k / 1000-style multipliers on crypto (kPEPE, 1000PEPEUSDT)
-  const base = s.replace(/^(1000+|K)(?=[A-Z])/, '').replace(/(USDT|USDC|USD)$/, '');
+  // 1000-style / lowercase-k multipliers on crypto (1000PEPEUSDT, kPEPE); KAITO / KAS keep their K
+  const kPrefixed = /^(?:[A-Za-z0-9]+:)?k[A-Z]/.test(symbol);
+  const base = (kPrefixed ? s.slice(1) : s).replace(/^1000+(?=[A-Z])/, '').replace(/(USDT|USDC|USD)$/, '');
   if (COMMODITIES.has(base) || COMMODITIES.has(s)) return 'xau';
   // FX pair: two ISO currencies (EURUSD, USDJPY)
   if (s.length === 6 && FX.has(s.slice(0, 3)) && FX.has(s.slice(3))) return 'xau';
