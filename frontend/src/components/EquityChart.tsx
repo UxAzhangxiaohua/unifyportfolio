@@ -41,14 +41,18 @@ interface Hover { x: number; y: number; t: number; v: number }
 // Stable reference while history loads, so effects keyed on `points` don't re-run every render
 const EMPTY: Array<{ t: number; v: number }> = [];
 
-export function EquityChart() {
-  const [period, setPeriod] = useState<TimePeriod>('24h');
+type Scope = 'total' | 'trading';
+
+/** fixedScope: lock the curve to one scope and hide the 总权益 / 交易账户 toggle */
+export function EquityChart({ fixedScope, defaultPeriod = '24h' }: { fixedScope?: Scope; defaultPeriod?: TimePeriod } = {}) {
+  const [period, setPeriod] = useState<TimePeriod>(defaultPeriod);
   const [selectedAccount, setSelectedAccount] = useState<string | undefined>(undefined);
   // 'trading' = equity minus earn + funding wallets (CFD/MT5 count as trading)
-  const [scope, setScope] = useState<'total' | 'trading'>(() => {
+  const [savedScope, setScope] = useState<Scope>(() => {
     try { return localStorage.getItem(SCOPE_KEY) === 'trading' ? 'trading' : 'total'; } catch { return 'total'; }
   });
-  useEffect(() => { try { localStorage.setItem(SCOPE_KEY, scope); } catch { /* ignore */ } }, [scope]);
+  useEffect(() => { if (!fixedScope) try { localStorage.setItem(SCOPE_KEY, savedScope); } catch { /* ignore */ } }, [savedScope, fixedScope]);
+  const scope = fixedScope ?? savedScope;
   const { data: history } = useHistory(period, selectedAccount, scope);
   const { data: accounts } = useHistoryAccounts();
 
@@ -183,10 +187,12 @@ export function EquityChart() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="seg" title={tr('交易账户 = 权益 − 理财 − 资金账户余额（CFD/MT5 计入交易账户）', 'Trading = equity − earn − funding wallets (CFD/MT5 count as trading)')}>
-            <button data-active={scope === 'total'} onClick={() => setScope('total')}>{tr('总权益', 'Total')}</button>
-            <button data-active={scope === 'trading'} onClick={() => setScope('trading')}>{tr('交易账户', 'Trading')}</button>
-          </div>
+          {!fixedScope && (
+            <div className="seg" title={tr('交易账户 = 权益 − 理财 − 资金账户余额（CFD/MT5 计入交易账户）', 'Trading = equity − earn − funding wallets (CFD/MT5 count as trading)')}>
+              <button data-active={scope === 'total'} onClick={() => setScope('total')}>{tr('总权益', 'Total')}</button>
+              <button data-active={scope === 'trading'} onClick={() => setScope('trading')}>{tr('交易账户', 'Trading')}</button>
+            </div>
+          )}
           {accounts && accounts.length > 1 && (
             <select
               value={selectedAccount ?? ''}

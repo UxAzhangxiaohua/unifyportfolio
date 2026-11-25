@@ -5,6 +5,7 @@ import { fmtCompact, fmtPct, fmtPrice, fmtQty, fmtSigned, fmtUSD, pnlClass } fro
 import { exposureOf, fmtLev, isPerpLike, sumExposure, tradingEquity, type Exposure } from '../lib/exposure';
 import { CardHeader, EmptyState, ExchangeTag, Segmented, SideBadge } from './ui';
 import { tr } from '../lib/i18n';
+import { liqDistance } from '../lib/risk';
 
 type Row = Position & { accountLabel: string; exchange: ExchangeType; accountId: string };
 type XRow = Row & { x: Exposure };
@@ -16,15 +17,6 @@ export function flatten(accounts: AccountSnapshot[], pred: (p: Position) => bool
   return accounts.flatMap((a) =>
     a.positions.filter(pred).map((p) => ({ ...p, accountLabel: a.label, exchange: a.exchange, accountId: a.accountId })),
   );
-}
-
-/** Distance from mark to liquidation, as % of mark (always positive = room left) */
-function liqDistance(p: Position): number | null {
-  if (!p.liquidationPrice || !p.currentPrice) return null;
-  const d = p.side === 'long'
-    ? (p.currentPrice - p.liquidationPrice) / p.currentPrice
-    : (p.liquidationPrice - p.currentPrice) / p.currentPrice;
-  return d * 100;
 }
 
 const levTitle = () => tr('实际杠杆 = 敞口 ÷ 交易账户权益（不含理财、资金账户和 CFD 账户；杠杆 ETF 已乘以其倍数）', 'Actual leverage = exposure ÷ trading-account equity (excl. earn, funding and CFD accounts; leveraged ETFs multiplied by their factor)');

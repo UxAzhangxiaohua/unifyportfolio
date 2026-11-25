@@ -25,7 +25,7 @@ export function CardHeader({ title, sub, right }: { title: ReactNode; sub?: Reac
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4 pb-3">
       <div className="flex items-baseline gap-2.5 min-w-0">
-        <h2 className="section-title">{title}</h2>
+        <h2 className="section-title shrink-0">{title}</h2>
         {sub && <span className="text-[12px] text-text-muted truncate">{sub}</span>}
       </div>
       {right && <div className="flex items-center gap-2 flex-wrap">{right}</div>}
