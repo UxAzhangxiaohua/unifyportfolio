@@ -55,13 +55,12 @@ function LevTile({ label, hint, g, eqLabel, extra }: { label: string; hint: stri
       value={<>{g.lev != null ? fmtLev(g.lev) : '—'}
         {g.equity > 0 && <span className="ml-2 text-[12px] font-normal text-text-muted">{tr('净', 'net')} {fmtLev(Math.abs(g.net) / g.equity)}</span>}</>}>
       <SplitBar parts={[{ v: g.long, c: 'var(--color-profit)' }, { v: g.short, c: 'var(--color-loss)' }]} />
-      <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-[12px]">
-        <KV k={tr('敞口', 'Gross')} v={fmtCompact(g.gross)} />
-        <KV k={tr('净', 'Net')} v={<span className={pnlClass(g.net)}>{fmtSigned(g.net, { decimals: false })}</span>} />
-        <KV k={<><span className="text-profit">{tr('多', 'L')}</span> / <span className="text-loss">{tr('空', 'S')}</span></>} v={<><span className="text-profit">{fmtCompact(g.long)}</span> / <span className="text-loss">{fmtCompact(g.short)}</span></>} />
+      <div className="flex flex-col gap-1 text-[12px]">
+        <KV k={tr('敞口', 'Gross')} v={<>{fmtCompact(g.gross)} <span className="text-text-muted">(<span className="text-profit">{fmtCompact(g.long)}</span> / <span className="text-loss">{fmtCompact(g.short)}</span>)</span></>} />
+        <KV k={tr('净敞口', 'Net')} v={<span className={pnlClass(g.net)}>{fmtSigned(g.net, { decimals: false })}</span>} />
         <KV k={eqLabel} v={fmtCompact(g.equity)} />
-        <KV k={tr('保证金', 'Margin')} v={<>{g.marginEstimated && '≈'}{fmtCompact(g.margin)}</>} />
-        <KV k={tr('占权益', 'Of equity')} v={mPct != null ? <span className={mPct >= 0.8 ? 'text-loss' : mPct >= 0.5 ? 'text-delayed' : ''}>{(mPct * 100).toFixed(1)}%</span> : '—'} />
+        <KV k={tr('保证金', 'Margin')} v={<>{g.marginEstimated && '≈'}{fmtCompact(g.margin)}
+          {mPct != null && <span className={`ml-1.5 ${mPct >= 0.8 ? 'text-loss' : mPct >= 0.5 ? 'text-delayed' : 'text-text-muted'}`}>{(mPct * 100).toFixed(1)}%</span>}</>} />
         {extra}
       </div>
       {mPct != null && <RatioBar ratio={mPct} />}
@@ -91,9 +90,22 @@ export function RiskKpis({ accounts }: { accounts: AccountSnapshot[] }) {
   const mt5Only = cfdRisks.length > 0 && cfdRisks.every((r) => r.a.exchange === 'mt5');
   const levels = cfdRisks.map((r) => r.marginLevel).filter((v): v is number => v != null);
   const minLevel = levels.length ? Math.min(...levels) : null;
+  const totLong = perpG.long + cfdG.long;
+  const totShort = perpG.short + cfdG.short;
 
   return (
-    <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${cfdG.n ? 'xl:grid-cols-4' : 'xl:grid-cols-3'}`}>
+    <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${cfdG.n ? 'lg:grid-cols-3 xl:grid-cols-5' : 'lg:grid-cols-4'}`}>
+      <Tile label={cfdG.n ? tr('总敞口（合约 + CFD）', 'Gross exposure (perps + CFD)') : tr('总敞口', 'Gross exposure')} value={fmtUSD(totLong + totShort, { decimals: false })}
+        hint={tr('加密合约与 CFD 的敞口合计（杠杆 ETF 已乘以倍数，反向 ETF 的空单计为多头）；杠杆在右侧分开计算', 'Crypto perps + CFD exposure (leveraged ETFs × factor, a short on an inverse ETF counts as long); leverage is computed per group on the right')}>
+        <SplitBar parts={[{ v: totLong, c: 'var(--color-profit)' }, { v: totShort, c: 'var(--color-loss)' }]} />
+        <div className="flex flex-col gap-1 text-[12px]">
+          <KV k={<><span className="text-profit">{tr('多', 'Long')}</span> / <span className="text-loss">{tr('空', 'Short')}</span></>} v={<><span className="text-profit">{fmtCompact(totLong)}</span> / <span className="text-loss">{fmtCompact(totShort)}</span></>} />
+          <KV k={tr('净敞口', 'Net')} v={<span className={pnlClass(totLong - totShort)}>{fmtSigned(totLong - totShort, { decimals: false })}</span>} />
+          {cfdG.n > 0 && <KV k={<>{tr('加密合约', 'Crypto perps')} / {mt5Only ? 'MT5' : 'CFD'}</>} v={<>{fmtCompact(perpG.gross)} / {fmtCompact(cfdG.gross)}</>} />}
+          {optDelta != null && <KV k={tr('期权 $Delta', 'Options $Delta')} v={<span className={pnlClass(optDelta)}>{fmtSigned(optDelta, { decimals: false })}</span>} />}
+        </div>
+      </Tile>
+
       <LevTile label={tr('加密合约 · 实际杠杆', 'Crypto perps · actual leverage')} g={perpG} eqLabel={tr('交易权益', 'Trading eq.')}
         hint={tr('永续 / 交割合约敞口 ÷ 交易账户权益（总权益减去理财、资金账户和 CFD 子账户；杠杆 ETF 已乘以倍数）', 'Perp / futures exposure ÷ trading-account equity (total minus earn, funding and CFD sub-accounts; leveraged ETFs × factor)')} />
 
@@ -108,7 +120,6 @@ export function RiskKpis({ accounts }: { accounts: AccountSnapshot[] }) {
           {perps.length > 0 && <KV k={tr('加密合约', 'Crypto perps')} v={<span className={pnlClass(perpUpl)}>{fmtSigned(perpUpl)}</span>} />}
           {cfdG.n > 0 && <KV k={mt5Only ? 'MT5' : 'CFD'} v={<span className={pnlClass(cfdG.upl)}>{fmtSigned(cfdG.upl)}</span>} />}
           {opts.length > 0 && <KV k={tr('期权', 'Options')} v={<span className={pnlClass(optUpl)}>{fmtSigned(optUpl)}</span>} />}
-          {optDelta != null && <KV k={tr('期权 $Delta', 'Options $Delta')} v={<span className={pnlClass(optDelta)}>{fmtSigned(optDelta, { decimals: false })}</span>} />}
         </div>} />
 
       <Tile label={tr('资金费 · 下一轮预估', 'Funding · next round')}
