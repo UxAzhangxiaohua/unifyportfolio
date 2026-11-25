@@ -12,6 +12,15 @@ Multi-exchange trading portfolio dashboard that aggregates positions and balance
 - **Bitget** — Spot, USDT/USDC-M Futures, Earn, CFD (TradFi)
 - **MT5** — any MetaTrader 5 broker, via the account's investor (read-only) password: equity, margin, leverage, CFD positions with SL/TP
 
+## Features
+
+- **Overview** — total equity, per-account equity, stablecoins by wallet (trading / funding / earn), perps, options (greeks, exit calculator), MT5 CFD positions with SL/TP
+- **Equity curve** — 1H … ALL, total or trading-wallets only. Samples every 30 s, persisted every 30 min. Internal transfers between your accounts are bridged so they don't show as a dip. Before recording started the curve is reconstructed (grey): Hyperliquid from its own account-value history, other accounts walked back from closed trades + stablecoin deposits/withdrawals (≈ 90 days)
+- **Closed trades** — from each venue's own history (Bybit, Binance incl. options, OKX, Hyperliquid, Bitget, MT5 deals), split into XAU / Stock / Crypto / Option with PnL, win rate, payoff ratio, profit factor and per-instrument stats for 24H / 3D / 7D / 30D / All
+- **Deposits, withdrawals and cash-outs** — recent transfers with in-transit tracking, and all withdrawals to your own cash-out address(es)
+- **MCP server** — read-only interface so Claude can analyse the portfolio (see below)
+- **Margin alerts** — Discord alerts for CFD margin levels
+
 ## Architecture
 
 | Layer    | Stack                          | Port |
@@ -21,7 +30,7 @@ Multi-exchange trading portfolio dashboard that aggregates positions and balance
 
 - One connector per exchange (`backend/src/connectors/`)
 - Staggered per-exchange polling scheduler
-- In-memory TTL cache; SQLite only for equity history and deposit/withdrawal records
+- In-memory TTL cache; SQLite (`data/history.db`) for equity history, deposit/withdrawal records and closed trades
 - MT5 via a small Go helper (`mt5bridge/`, see below)
 - All API keys are **read-only** — no order placement
 
@@ -113,6 +122,53 @@ cd mt5bridge && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/mt5snap
 ```
 
 A CFD account whose margin level drops below a threshold posts one alert per threshold (the lowest pings `@here`), and one all-clear once it is back above the highest one. A threshold counts as recovered only 5 points above the line, so a level hovering around it doesn't spam.
+
+### Deposits, transfers and cash-outs
+
+```json
+"payoutAddresses": ["0x..."],
+"transferSources": { "0x...": "mt5-main" }
+```
+
+- `payoutAddresses` — your own cash-out address(es). Withdrawals there are listed under 出金记录 / Cash-outs and are never treated as transfers between your accounts.
+- `transferSources` — on-chain sender address → account id, for accounts that don't report their own withdrawals (MT5): a deposit from that address counts as an internal transfer.
+- Keep real addresses only in `accounts.json` (gitignored).
+
+## MCP server (Claude)
+
+The backend serves a read-only [MCP](https://modelcontextprotocol.io) server so Claude can read the portfolio and, together with the TradingView MCP, analyse trades against price action. Enable it with a random token (at least 16 characters):
+
+```json
+"mcp": { "token": "a-long-random-string" }
+```
+
+Endpoint: `POST /api/mcp/<token>` (Streamable HTTP, stateless). Without a token configured the route answers 404. The token is the only access control — anyone with the URL can read your positions and trades, so keep it private.
+
+- **Claude Code** (same machine):
+  ```bash
+  claude mcp add --transport http --scope user unify-portfolio http://127.0.0.1:8189/api/mcp/<token>
+  ```
+- **claude.ai** (web / desktop): Settings → Connectors → Add custom connector, URL `https://<your domain>/api/mcp/<token>` (through the frontend, which proxies `/api/*`), no authentication.
+
+| Tool | Returns |
+|------|---------|
+| `get_portfolio` | Total equity; per account equity, trading equity, unrealized PnL, margin, stablecoins by wallet, MT5 margin state |
+| `get_positions` | Open positions (perps, options, CFDs, optionally spot) with entry / mark, notional, PnL, leverage, liquidation, funding, TP/SL |
+| `get_closed_trades` | Closed trades filtered by time, category, symbol, account, side — with a summary |
+| `get_trade_stats` | Win rate, payoff, profit factor, expectancy, holding time — grouped by category / instrument / account / side / weekday / hour / day / holding time (any time zone) |
+| `get_equity_history` | Equity curve (reconstructed part flagged) |
+| `get_performance` | Period changes and max drawdown |
+| `get_transfers` | Recent deposits / withdrawals and all cash-outs |
+
+Trades and positions carry `tvSymbol`, a TradingView `EXCHANGE:TICKER` hint (e.g. `OANDA:XAUUSD`, `PEPPERSTONE:NAS100`, `BYBIT:BTCUSDT.P`), so Claude can fetch the candles around an entry or exit. Times are UTC. Credentials, the MT5 login / server and wallet addresses are never returned.
+
+Example prompt: *"Use unify-portfolio to find my 5 worst XAU trades this month, then pull 15-minute candles around each from TradingView — did I chase the move or close too early?"*
+
+## Development workflow
+
+- `main` is what runs in production; `dev` is where work happens (a separate worktree, e.g. `git worktree add ../unifyportfolio-dev dev`).
+- Test a dev build beside production: `scripts/dev.sh start` in the dev worktree (loopback ports 8288 / 8289, production `accounts.json`, a copy of the history DB, alerts off); `scripts/dev.sh stop` afterwards.
+- Release: merge `dev` into `main` (`git merge --no-ff dev`), build, `pm2 restart unify-backend unify-frontend`.
 
 ## Notes
 
