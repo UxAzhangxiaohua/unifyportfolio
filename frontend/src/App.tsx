@@ -1,23 +1,15 @@
 import { usePortfolio } from './hooks/usePortfolio';
-import { Header } from './components/Header';
-import { KpiRow } from './components/KpiRow';
-import { EquityChart } from './components/EquityChart';
-import { MetricsRow } from './components/MetricsRow';
-import { AccountsGrid } from './components/AccountsGrid';
-import { StablesPanel } from './components/StablesPanel';
-import { PositionsTable } from './components/PositionsTable';
-import { OptionsTable } from './components/OptionsTable';
-import { CfdPanel } from './components/CfdPanel';
-import { OptionExitCalculator } from './components/OptionExitCalculator';
-import { OtherHoldings } from './components/OtherHoldings';
-import { TradesHistory } from './components/TradesHistory';
-import { PayoutsPanel } from './components/PayoutsPanel';
-import { TransfersPanel } from './components/TransfersPanel';
+import { Header, ErrorBanner } from './components/Header';
+import { PositionsPage } from './pages/PositionsPage';
+import { AccountsPage } from './pages/AccountsPage';
+import { TradesPage } from './pages/TradesPage';
 import { tr, locale, useLang } from './lib/i18n';
+import { usePage } from './lib/route';
 
 export default function App() {
   const { data, isLoading, error, dataUpdatedAt } = usePortfolio();
   useLang(); // re-render the whole tree when the language changes
+  const page = usePage();
 
   if (isLoading) {
     return (
@@ -43,26 +35,18 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen px-4 sm:px-6 py-5 max-w-[1440px] mx-auto space-y-4">
-      <Header data={data} />
-      <KpiRow data={data} />
-      <AccountsGrid accounts={data.accounts} total={data.totalEquity} />
-      <StablesPanel accounts={data.accounts} />
-      <PositionsTable accounts={data.accounts} />
-      <CfdPanel accounts={data.accounts} />
-      <OptionsTable accounts={data.accounts} />
-      <OptionExitCalculator accounts={data.accounts} />
-      <div className="grid grid-cols-1 gap-4">
-        <EquityChart />
-        <MetricsRow />
-      </div>
-      <TransfersPanel />
-      <OtherHoldings accounts={data.accounts} />
-      <TradesHistory />
-      <PayoutsPanel />
-      <footer className="text-center text-text-muted text-[11px] pb-4">
-        {tr('每 15 秒自动刷新', 'Auto-refresh every 15s')}{dataUpdatedAt > 0 && <> · {new Date(dataUpdatedAt).toLocaleTimeString(locale(), { hour12: false })}</>} · {tr('只读 API', 'Read-only API')}
-      </footer>
+    <div className="min-h-screen">
+      <Header data={data} page={page} />
+      {/* Only the active page renders, so history / trades are fetched only when their page is open */}
+      <main className="px-4 sm:px-6 py-5 max-w-[1440px] mx-auto space-y-4">
+        <ErrorBanner data={data} />
+        {page === 'positions' && <PositionsPage data={data} />}
+        {page === 'accounts' && <AccountsPage data={data} />}
+        {page === 'trades' && <TradesPage />}
+        <footer className="text-center text-text-muted text-[11px] pt-2 pb-4">
+          {tr('每 15 秒自动刷新', 'Auto-refresh every 15s')}{dataUpdatedAt > 0 && <> · {new Date(dataUpdatedAt).toLocaleTimeString(locale(), { hour12: false })}</>} · {tr('只读 API', 'Read-only API')}
+        </footer>
+      </main>
     </div>
   );
 }

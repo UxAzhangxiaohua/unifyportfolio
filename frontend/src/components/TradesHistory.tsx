@@ -5,6 +5,7 @@ import { ExchangeTag, SideBadge, CardHeader, EmptyState } from './ui';
 import { tr, locale } from '../lib/i18n';
 import { fmtSigned, pnlClass } from '../lib/format';
 import { instrumentKey, summarize } from '../lib/tradeStats';
+import { TradePnlCurve } from './TradePnlCurve';
 
 type Range = '24h' | '3d' | '7d' | '30d' | 'all';
 const RANGES: { key: Range; label: () => string; ms: number }[] = [
@@ -67,7 +68,8 @@ function Stat({ label, value, foot, title }: { label: string; value: ReactNode; 
   );
 }
 
-export function TradesHistory() {
+/** afterSummary renders between the stats card and the trade-list card */
+export function TradesHistory({ afterSummary }: { afterSummary?: ReactNode } = {}) {
   const { data, isLoading } = useTrades();
   const [range, setRange] = useState<Range>(() => {
     try { const v = localStorage.getItem(RANGE_KEY) as Range | null; return v && RANGES.some((r) => r.key === v) ? v : '7d'; } catch { return '7d'; }
@@ -99,11 +101,12 @@ export function TradesHistory() {
       .sort((a, b) => b.list.length - a.list.length || Math.abs(b.s.pnl) - Math.abs(a.s.pnl));
   }, [inCategory]);
 
-  if (isLoading || !all) return null;
+  if (isLoading || !all) return <>{afterSummary}</>;
   // Options tile only when there are option trades at all
   const hasOptions = all.some((t) => t.category === 'option');
 
   return (
+    <>
     <section className="card overflow-hidden">
       <CardHeader
         title={tr('已平仓统计', 'Closed trades')}
@@ -185,6 +188,10 @@ export function TradesHistory() {
           </div>
 
           <div className="px-5 pb-4">
+            <TradePnlCurve trades={shown} />
+          </div>
+
+          <div className="px-5 pb-4">
             {/* Per instrument */}
             <div className="rounded-lg border border-border-card overflow-hidden min-w-0">
               <div className="px-3.5 py-2.5 text-[12px] font-medium text-text-secondary border-b border-border-card">
@@ -232,11 +239,21 @@ export function TradesHistory() {
 
           </div>
 
+        </>
+      )}
+    </section>
+
+    {afterSummary}
+
+    {all.length > 0 && (
+      <section className="card overflow-hidden">
+          <CardHeader title={tr('平仓明细', 'Closed trades list')}
+            sub={<>{tr(`${shown.length} 笔`, `${shown.length} trades`)}{(category || instrument) && <> · {[category && catLabel(category), instrument].filter(Boolean).join(' · ')}</>}</>} />
           {/* Trade list */}
           {shown.length === 0 ? (
             <EmptyState>{tr('此区间没有平仓', 'No closes in this range')}</EmptyState>
           ) : (
-            <div className="overflow-x-auto max-h-[420px] border-t border-border-card">
+            <div className="overflow-x-auto max-h-[560px] border-t border-border-card">
               <table className="data">
                 <thead>
                   <tr>
@@ -277,8 +294,8 @@ export function TradesHistory() {
               )}
             </div>
           )}
-        </>
-      )}
-    </section>
+      </section>
+    )}
+    </>
   );
 }
