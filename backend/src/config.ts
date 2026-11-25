@@ -110,6 +110,10 @@ export function loadConfig(): AppConfig {
     ibkrPollIntervalSeconds: typeof parsed.ibkrPollIntervalSeconds === 'number' ? parsed.ibkrPollIntervalSeconds : 300,
     mt5PollIntervalSeconds: typeof parsed.mt5PollIntervalSeconds === 'number' ? parsed.mt5PollIntervalSeconds : 60,
     alerts: parsed.alerts && typeof parsed.alerts === 'object' ? (parsed.alerts as AppConfig['alerts']) : undefined,
+    historyBackfill: Array.isArray(parsed.historyBackfill) ? (parsed.historyBackfill as AppConfig['historyBackfill']) : undefined,
+    mcp: parsed.mcp && typeof (parsed.mcp as { token?: unknown }).token === 'string' ? { token: (parsed.mcp as { token: string }).token } : undefined,
+    payoutAddresses: Array.isArray(parsed.payoutAddresses) ? (parsed.payoutAddresses as unknown[]).filter((a): a is string => typeof a === 'string' && a.trim() !== '') : undefined,
+    transferSources: parsed.transferSources && typeof parsed.transferSources === 'object' ? (parsed.transferSources as Record<string, string>) : undefined,
     accounts,
   };
 

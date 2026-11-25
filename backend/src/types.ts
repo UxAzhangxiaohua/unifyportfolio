@@ -117,12 +117,36 @@ export interface AlertsConfig {
   marginLevels?: number[];
 }
 
+/**
+ * Funds that existed before the dashboard started counting them (e.g. a wallet type added to a
+ * connector later). `amount` is added to the account for every history point before `before`,
+ * so the curve doesn't show the tracking change as a gain.
+ */
+export interface HistoryBackfill {
+  accountId: string;
+  /** ISO time or unix seconds: first sample that already includes the funds */
+  before: string | number;
+  amount: number;
+  note?: string;
+}
+
 export interface AppConfig {
   pollIntervalSeconds: number;
   ibkrPollIntervalSeconds: number;
   /** MT5 polls log in fresh each time, so they run slower than API polls (default 60) */
   mt5PollIntervalSeconds: number;
   alerts?: AlertsConfig;
+  historyBackfill?: HistoryBackfill[];
+  /**
+   * On-chain addresses that send on behalf of a tracked account that reports no withdrawals itself
+   * (e.g. an MT5 broker's payout address): { "0xabc…": "mt5-exness" }. Deposits from them count
+   * as internal transfers from that account.
+   */
+  transferSources?: Record<string, string>;
+  /** Own cash-out addresses: withdrawals to them are recorded as payouts (出金), never paired as internal transfers */
+  payoutAddresses?: string[];
+  /** Read-only MCP endpoint POST /api/mcp/<token> (mcp.ts); disabled without a token (≥ 16 chars) */
+  mcp?: { token: string };
   accounts: AccountConfig[];
 }
 
@@ -231,6 +255,8 @@ export interface FundFlow {
   /** out: destination address; in: our deposit address (lower-cased) */
   address: string | null;
   network: string | null;
+  /** in only: on-chain sender address (lower-cased) when the venue reports it */
+  from?: string | null;
   /** Venue timestamp (ms): out = requested, in = record created */
   time: number;
   /** Venue timestamp (ms) when completed / credited, if reported */
@@ -254,6 +280,27 @@ export interface TransferView {
   startedAt: number;
   /** ms: when it was credited at the destination */
   arrivedAt: number | null;
+  /** Withdrawal to a configured cash-out address */
+  payout?: boolean;
+}
+
+export interface PayoutView {
+  id: string;
+  account: string;
+  coin: string;
+  /** Amount sent to the cash-out address (fee excluded) */
+  amount: number;
+  fee: number;
+  network: string | null;
+  status: 'pending' | 'done' | 'failed';
+  /** ms */
+  time: number;
+}
+
+export interface PayoutsResponse {
+  /** false when no payoutAddresses are configured */
+  configured: boolean;
+  payouts: PayoutView[];
 }
 
 export interface TransfersResponse {
@@ -283,7 +330,18 @@ export interface ClosedTrade {
   quantity: number;
   realizedPnl: number;
   pnlPercent: number;
-  entryTime: string;
+  /** null when the venue's close record doesn't say when the position was opened */
+  entryTime: string | null;
   exitTime: string;
-  durationSeconds: number;
+  durationSeconds: number | null;
+  /** Stock / index, crypto, XAU (gold, other commodities / FX), or option */
+  category?: TradeCategory;
+  /** venue = from the venue's own trade / closed-position history (exact); inferred = from position changes (approx.) */
+  source?: 'venue' | 'inferred';
+  /** Fees / commission / swap / funding included in realizedPnl (negative = cost; venue trades) */
+  fees?: number;
 }
+
+/** xau = gold (plus any other commodity / FX contract); indices (NAS100, USTEC…) count as stock */
+export type TradeCategory = 'stock' | 'crypto' | 'xau' | 'option';
+

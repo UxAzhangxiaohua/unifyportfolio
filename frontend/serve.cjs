@@ -4,8 +4,10 @@ const path = require('path');
 const { URL } = require('url');
 
 const DIST = path.join(__dirname, 'dist');
-const PORT = 8188;
-const API_TARGET = 'http://127.0.0.1:8189';
+// Production: 8188 → 8189. The dev test instance (scripts/dev.sh) overrides these via env
+const PORT = Number(process.env.FRONTEND_PORT) || 8188;
+const HOST = process.env.BIND_HOST || '0.0.0.0';
+const API_TARGET = process.env.API_TARGET || 'http://127.0.0.1:8189';
 
 const MIME = {
   '.html': 'text/html',
@@ -55,6 +57,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Frontend serving on http://0.0.0.0:${PORT}, proxying /api to ${API_TARGET}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Frontend serving on http://${HOST}:${PORT}, proxying /api to ${API_TARGET}`);
 });

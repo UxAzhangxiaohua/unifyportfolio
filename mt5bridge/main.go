@@ -36,6 +36,38 @@ type input struct {
 	Password string          `json:"password"`
 	Server   string          `json:"server"`
 	Host     string          `json:"host"`
+	// Unix seconds; > 0 also returns trading deals since then (read-only history query)
+	DealsSince int64 `json:"dealsSince"`
+}
+
+// deal is one trading deal (balance operations are skipped). mtapi decodes the
+// record's entry into Deal.Type and the direction into Deal.Entry (swapped
+// relative to their names; verified on a live account 2026-11-25), so they are
+// read crosswise here.
+type deal struct {
+	Ticket    int64   `json:"ticket"`
+	Order     int64   `json:"order"`
+	Position  int64   `json:"position"`
+	Symbol    string  `json:"symbol"`
+	Entry     string  `json:"entry"` // in | out
+	Side      string  `json:"side"`  // buy | sell
+	Volume    float64 `json:"volume"`
+	Price     float64 `json:"price"`
+	ProfitUSD float64 `json:"profitUsd"` // price PnL only
+	FeesUSD   float64 `json:"feesUsd"`   // commission + swap (negative = cost)
+	Comment   string  `json:"comment"`   // server sets "[sl x]" / "[tp x]" / "[so ...]" on triggered closes
+	Time      int64   `json:"time"`      // unix ms
+}
+
+// balanceOp is a non-trading deal that moves the balance: deposit, withdrawal, credit,
+// bonus or correction (symbol-less deals). Used to reconstruct the balance history.
+type balanceOp struct {
+	Ticket    int64   `json:"ticket"`
+	AmountUSD float64 `json:"amountUsd"` // + deposit / − withdrawal
+	Kind      int     `json:"kind"`      // raw record kind (as decoded into Deal.Type / Deal.Entry)
+	Kind2     int     `json:"kind2"`
+	Comment   string  `json:"comment"`
+	Time      int64   `json:"time"` // unix ms
 }
 
 type position struct {
@@ -57,19 +89,21 @@ type position struct {
 }
 
 type output struct {
-	Login           int64      `json:"login"`
-	Server          string     `json:"server"`
-	Group           string     `json:"group"`
-	Currency        string     `json:"currency"`
-	UsdRate         float64    `json:"usdRate"`
-	Leverage        int        `json:"leverage"`
-	BalanceUSD      float64    `json:"balanceUsd"`
-	CreditUSD       float64    `json:"creditUsd"`
-	EquityUSD       float64    `json:"equityUsd"`
-	MarginUSD       float64    `json:"marginUsd"`
-	MarginEstimated bool       `json:"marginEstimated"`
-	Positions       []position `json:"positions"`
-	Warnings        []string   `json:"warnings"`
+	Login           int64       `json:"login"`
+	Server          string      `json:"server"`
+	Group           string      `json:"group"`
+	Currency        string      `json:"currency"`
+	UsdRate         float64     `json:"usdRate"`
+	Leverage        int         `json:"leverage"`
+	BalanceUSD      float64     `json:"balanceUsd"`
+	CreditUSD       float64     `json:"creditUsd"`
+	EquityUSD       float64     `json:"equityUsd"`
+	MarginUSD       float64     `json:"marginUsd"`
+	MarginEstimated bool        `json:"marginEstimated"`
+	Positions       []position  `json:"positions"`
+	Warnings        []string    `json:"warnings"`
+	Deals           []deal      `json:"deals,omitempty"`
+	BalanceOps      []balanceOp `json:"balanceOps,omitempty"`
 }
 
 var currencies = map[string]bool{
@@ -317,6 +351,41 @@ func main() {
 	}
 	for i := range out.Positions {
 		out.Positions[i].NotionalUSD = math.Round(out.Positions[i].NotionalUSD*100) / 100
+	}
+
+	if in.DealsSince > 0 {
+		out.Deals = []deal{}
+		if ds, err := client.Deals(ctx, time.Unix(in.DealsSince, 0), time.Time{}); err != nil {
+			out.Warnings = append(out.Warnings, "deal history unavailable")
+			out.Deals = nil
+		} else {
+			out.BalanceOps = []balanceOp{}
+			for _, d := range ds {
+				if d.Symbol == "" && d.Profit != 0 {
+					out.BalanceOps = append(out.BalanceOps, balanceOp{
+						Ticket: d.Ticket, AmountUSD: d.Profit * rate, Kind: d.Type, Kind2: d.Entry,
+						Comment: d.Comment, Time: d.Time.UnixMilli(),
+					})
+					continue
+				}
+				if d.Symbol == "" || d.Volume <= 0 || d.Type > 1 || d.Entry > 1 {
+					continue // balance / credit operations, or entry kinds we don't model
+				}
+				x := deal{
+					Ticket: d.Ticket, Order: d.Order, Position: d.Position, Symbol: d.Symbol,
+					Entry: "in", Side: "buy", Volume: d.Volume, Price: d.Price,
+					ProfitUSD: d.Profit * rate, FeesUSD: (d.Commission + d.Swap) * rate,
+					Comment: d.Comment, Time: d.Time.UnixMilli(),
+				}
+				if d.Type == 1 {
+					x.Entry = "out"
+				}
+				if d.Entry == 1 {
+					x.Side = "sell"
+				}
+				out.Deals = append(out.Deals, x)
+			}
+		}
 	}
 
 	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {

@@ -15,7 +15,8 @@ let levels: number[] = DEFAULT_LEVELS;
 const tiers = new Map<string, number>();
 
 export function initAlerts(cfg: AlertsConfig | undefined): void {
-  const url = cfg?.discordWebhook?.trim() || '';
+  // The dev test instance shares accounts.json with production: it must not send duplicate alerts
+  const url = process.env.DISABLE_ALERTS === '1' ? '' : cfg?.discordWebhook?.trim() || '';
   // The example config's placeholder is not a webhook
   webhook = /^https:\/\/\S+$/.test(url) && !url.includes('YOUR_') ? url : null;
   if (url && !webhook) console.warn('[alerts] alerts.discordWebhook is not a usable URL (placeholder?) — ignored');

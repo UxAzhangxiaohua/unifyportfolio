@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { applyFunding, BaseConnector, cachedPublic, lower, num, parseOptionSymbol, stableCoin, type FundingQuote } from './base.js';
-import type { AccountConfig, AccountSnapshot, FundFlow, OKXCredentials, Position, StableBalance } from '../types.js';
+import type { AccountConfig, AccountSnapshot, ClosedTrade, FundFlow, OKXCredentials, Position, StableBalance, TradeCategory } from '../types.js';
+import { guessCategory } from '../categories.js';
 
 const BASE_URL = 'https://www.okx.com';
 const STABLES = new Set(['USDT', 'USDC']);
@@ -203,6 +204,71 @@ export class OKXConnector extends BaseConnector {
     return out;
   }
 
+  /**
+   * Closed positions: /api/v5/account/positions-history (3 months; one row per position, updated
+   * on partial closes — so the id is the position id and the row is upserted). realizedPnl is net
+   * of fees and funding, in the margin currency: coin-margined values are converted to USD at the
+   * close price (index price for options).
+   */
+  async fetchClosedTrades(sinceMs: number): Promise<ClosedTrade[]> {
+    const out: ClosedTrade[] = [];
+    for (const instType of ['SWAP', 'FUTURES', 'OPTION'] as const) {
+      const rows: OKXClosedPosition[] = [];
+      let after: number | null = null;
+      for (let page = 0; page < 20; page++) {
+        const batch: OKXClosedPosition[] = await this.signedGet<OKXClosedPosition[]>(
+          `/api/v5/account/positions-history?instType=${instType}&limit=100${after != null ? `&after=${after}` : ''}`);
+        rows.push(...batch.filter((r) => num(r.uTime) >= sinceMs));
+        if (batch.length < 100) break;
+        const oldest = Math.min(...batch.map((r) => num(r.uTime)));
+        if (!(oldest > sinceMs) || oldest === after) break;
+        after = oldest;
+      }
+      if (!rows.length) continue;
+      const cats = instType === 'OPTION' ? null : await this.instCategories(instType).catch(() => new Map<string, string>());
+      for (const r of rows) {
+        const coinMargined = !STABLES.has(r.ccy) && r.ccy !== 'USD';
+        let usd = 1;
+        if (coinMargined) usd = instType === 'OPTION' ? await this.indexPrice(r.uly).catch(() => 0) : num(r.closeAvgPx);
+        if (!(usd > 0)) continue;
+        const fees = (num(r.fee) + num(r.fundingFee) + num(r.liqPenalty)) * usd;
+        out.push(this.trade({
+          id: `okx:${r.posId}`,
+          symbol: r.instId,
+          side: r.direction === 'short' ? 'short' : 'long',
+          entryPrice: num(r.openAvgPx),
+          exitPrice: num(r.closeAvgPx),
+          quantity: num(r.closeTotalPos),
+          pnl: num(r.realizedPnl) * usd,
+          fees,
+          entryTime: num(r.cTime),
+          exitTime: num(r.uTime),
+          category: instType === 'OPTION' ? 'option' : okxCategory(r.instId, cats?.get(r.instId)),
+        }));
+      }
+    }
+    return out;
+  }
+
+  /** instId → instCategory ('1' crypto, '3' stocks, '4' commodities, '5' forex, …) */
+  private instCategories(instType: 'SWAP' | 'FUTURES'): Promise<Map<string, string>> {
+    return cachedPublic(`okx:instCategory:${instType}`, 6 * 3_600_000, async () => {
+      const res = await fetch(`${BASE_URL}/api/v5/public/instruments?instType=${instType}`);
+      if (!res.ok) throw new Error(`OKX instruments ${res.status}`);
+      const body = (await res.json()) as { data: Array<{ instId: string; instCategory?: string }> };
+      return new Map(body.data.map((i) => [i.instId, i.instCategory ?? '']));
+    });
+  }
+
+  private indexPrice(uly: string): Promise<number> {
+    const instId = uly.replace(/-USDT?$|-USDC$/, '') + '-USD';
+    return cachedPublic(`okx:index:${instId}`, 60_000, async () => {
+      const res = await fetch(`${BASE_URL}/api/v5/market/index-tickers?instId=${encodeURIComponent(instId)}`);
+      const body = (await res.json()) as { data?: Array<{ idxPx: string }> };
+      return num(body.data?.[0]?.idxPx);
+    });
+  }
+
   /** OKX: `amt` excludes the fee (fee charged separately, verified live) */
   async fetchFlows(sinceMs: number): Promise<FundFlow[]> {
     const [wd, dep] = await Promise.all([
@@ -275,4 +341,21 @@ async function okxFundingQuotes(instIds: string[]): Promise<Map<string, FundingQ
     out.set(instId, { rate: num(r.fundingRate), nextTime: t || null, intervalH: t && t2 > t ? (t2 - t) / 3_600_000 : null });
   }));
   return out;
+}
+
+interface OKXClosedPosition {
+  instId: string; instType: string; uly: string; ccy: string; posId: string; direction: 'long' | 'short' | string;
+  openAvgPx: string; closeAvgPx: string; closeTotalPos: string; realizedPnl: string; fee: string; fundingFee: string;
+  liqPenalty?: string; type: string; cTime: string; uTime: string;
+}
+
+function okxCategory(instId: string, instCategory: string | undefined): TradeCategory {
+  // Gold, including gold-backed tokens listed as crypto
+  if (guessCategory(instId) === 'xau') return 'xau';
+  switch (instCategory) {
+    case '1': return 'crypto';
+    case '3': return 'stock';
+    case '4': case '5': return 'xau';
+    default: return guessCategory(instId);
+  }
 }

@@ -1,4 +1,4 @@
-import type { PortfolioResponse, HistoryResponse, MetricsResponse, TradesResponse, TimePeriod, TransfersResponse } from '../types';
+import type { PortfolioResponse, HistoryResponse, MetricsResponse, TradesResponse, TimePeriod, TransfersResponse, PayoutsResponse } from '../types';
 
 export async function fetchPortfolio(): Promise<PortfolioResponse> {
   const res = await fetch('/api/portfolio');
@@ -36,6 +36,12 @@ export async function fetchMetrics(): Promise<MetricsResponse> {
 
 export async function fetchTransfers(): Promise<TransfersResponse> {
   const res = await fetch('/api/transfers');
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchPayouts(): Promise<PayoutsResponse> {
+  const res = await fetch('/api/payouts');
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchPortfolio, fetchHistory, fetchMetrics, fetchTrades, fetchHistoryAccounts, fetchTransfers } from '../lib/api';
+import { fetchPortfolio, fetchHistory, fetchMetrics, fetchTrades, fetchHistoryAccounts, fetchTransfers, fetchPayouts } from '../lib/api';
 import type { TimePeriod } from '../types';
 
 export function usePortfolio() {
@@ -44,6 +44,15 @@ export function useTransfers() {
     queryFn: fetchTransfers,
     refetchInterval: 15_000,
     staleTime: 10_000,
+  });
+}
+
+export function usePayouts() {
+  return useQuery({
+    queryKey: ['payouts'],
+    queryFn: fetchPayouts,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 }
 

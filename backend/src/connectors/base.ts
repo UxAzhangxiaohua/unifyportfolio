@@ -1,4 +1,4 @@
-import type { AccountConfig, AccountSnapshot, FundFlow, Position } from '../types.js';
+import type { AccountConfig, AccountSnapshot, ClosedTrade, FundFlow, Position, TradeCategory } from '../types.js';
 
 /** Warning text marking data served from sticky()'s cache (scheduler.ts checks for it) */
 export const STALE_MARKER = ': using data from ';
@@ -15,8 +15,51 @@ export abstract class BaseConnector {
    * Stablecoin deposits/withdrawals since `sinceMs` (null = venue not supported).
    * Called alongside fetch() so a balance change and its withdrawal record are observed together.
    */
-  async fetchFlows(_sinceMs: number): Promise<FundFlow[] | null> {
+  async fetchFlows(_sinceMs: number, _untilMs?: number): Promise<FundFlow[] | null> {
     return null;
+  }
+
+  /**
+   * The venue's own account-value history (USD, oldest first; null = not available). Used to fill
+   * the equity curve before the first recorded sample (backfill.ts).
+   */
+  async fetchEquityHistory(): Promise<Array<{ t: number; v: number }> | null> {
+    return null;
+  }
+
+  /**
+   * Closed trades since `sinceMs` from the venue's own history (null = venue not supported).
+   * Ids must be stable across calls (records are upserted). Polled by the scheduler every few minutes.
+   */
+  async fetchClosedTrades(_sinceMs: number): Promise<ClosedTrade[] | null> {
+    return null;
+  }
+
+  /** Build a venue ClosedTrade; pnl is net (fees included), fees negative = cost */
+  protected trade(p: {
+    id: string; symbol: string; side: 'long' | 'short'; entryPrice: number; exitPrice: number; quantity: number;
+    pnl: number; fees: number; entryTime: number | null; exitTime: number; category: TradeCategory;
+  }): ClosedTrade {
+    const dir = p.side === 'long' ? 1 : -1;
+    const entryTime = p.entryTime && p.entryTime > 0 && p.entryTime <= p.exitTime ? p.entryTime : null;
+    return {
+      id: `${this.account.id}:${p.id}`,
+      accountId: this.account.id,
+      exchange: this.account.exchange,
+      symbol: p.symbol,
+      side: p.side,
+      entryPrice: p.entryPrice,
+      exitPrice: p.exitPrice,
+      quantity: p.quantity,
+      realizedPnl: p.pnl,
+      pnlPercent: p.entryPrice > 0 ? ((p.exitPrice - p.entryPrice) / p.entryPrice) * 100 * dir : 0,
+      entryTime: entryTime ? new Date(entryTime).toISOString() : null,
+      exitTime: new Date(p.exitTime).toISOString(),
+      durationSeconds: entryTime ? Math.floor((p.exitTime - entryTime) / 1000) : null,
+      category: p.category,
+      source: 'venue',
+      fees: p.fees,
+    };
   }
 
   private stickyCache = new Map<string, { value: unknown; at: number }>();

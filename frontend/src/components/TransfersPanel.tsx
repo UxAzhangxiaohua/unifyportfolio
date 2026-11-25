@@ -77,7 +77,7 @@ export function TransfersPanel() {
                   {new Date(t.startedAt).toLocaleString(locale(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
                 </td>
                 <td className="text-text-secondary">{t.fromAccount ?? '—'}</td>
-                <td className="text-text-secondary">{t.toAccount ?? (t.state === 'in_transit' ? '…' : '—')}</td>
+                <td className="text-text-secondary">{t.toAccount ?? (t.payout ? tr('出金地址', 'Cash-out address') : t.state === 'in_transit' ? '…' : '—')}</td>
                 <td className="r num">{t.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} <span className="text-[11px] text-text-muted">{t.coin}</span></td>
                 <td className="r num text-text-secondary">{t.fee ? t.fee.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '—'}</td>
                 <td className="text-text-muted text-[12px]">{t.network ?? '—'}</td>
@@ -86,8 +86,8 @@ export function TransfersPanel() {
                     : t.state === 'in_transit' ? fmtDuration(Date.now() - t.startedAt) : '—'}
                 </td>
                 <td>
-                  <span title={stateHint(t.state)} className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${STATE_STYLE[t.state]}`}>
-                    {stateLabel(t.state)}
+                  <span title={t.payout ? tr('转到你的出金地址', 'Sent to your cash-out address') : stateHint(t.state)} className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${STATE_STYLE[t.state]}`}>
+                    {t.payout ? tr('出金', 'Cash-out') : stateLabel(t.state)}
                   </span>
                 </td>
               </tr>

@@ -1,5 +1,6 @@
 import { applyFunding, BaseConnector, cachedPublic, lower, num, stableCoin, type FundingQuote } from './base.js';
-import type { AccountConfig, AccountSnapshot, FundFlow, HyperliquidCredentials, Position, StableBalance } from '../types.js';
+import type { AccountConfig, AccountSnapshot, ClosedTrade, FundFlow, HyperliquidCredentials, Position, StableBalance, TradeCategory } from '../types.js';
+import { guessCategory } from '../categories.js';
 
 const API_URL = 'https://api.hyperliquid.xyz/info';
 
@@ -152,11 +153,11 @@ export class HyperliquidConnector extends BaseConnector {
    * address (perp↔spot, vaults, staking) stay within the tracked equity and are ignored.
    * A withdrawal lands at this same address on Arbitrum, hence `address` = own address.
    */
-  async fetchFlows(sinceMs: number): Promise<FundFlow[]> {
+  async fetchFlows(sinceMs: number, untilMs?: number): Promise<FundFlow[]> {
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'userNonFundingLedgerUpdates', user: this.address, startTime: sinceMs }),
+      body: JSON.stringify({ type: 'userNonFundingLedgerUpdates', user: this.address, startTime: sinceMs, ...(untilMs ? { endTime: untilMs } : {}) }),
     });
     if (!res.ok) throw new Error(`ledger ${res.status}: ${(await res.text()).substring(0, 200)}`);
     const rows = (await res.json()) as HLLedgerUpdate[];
@@ -180,6 +181,85 @@ export class HyperliquidConnector extends BaseConnector {
       }
     }
     return flows;
+  }
+
+  /**
+   * Closed trades from perp fills (userFillsByTime, 2000 per page): closing fills ("Close Long",
+   * "Close Short", the closing part of a flip, liquidations) grouped per order. closedPnl excludes
+   * fees; entry = exit − closedPnl ÷ size.
+   */
+  async fetchClosedTrades(sinceMs: number): Promise<ClosedTrade[]> {
+    const fills: HLFill[] = [];
+    let start = sinceMs;
+    for (let page = 0; page < 20; page++) {
+      const batch = await this.post<HLFill[]>({ type: 'userFillsByTime', user: this.address, startTime: start, aggregateByTime: false });
+      fills.push(...batch);
+      if (batch.length < 2000) break;
+      start = batch[batch.length - 1].time + 1;
+    }
+    const groups = new Map<string, HLFill[]>();
+    for (const f of fills) {
+      if (f.coin.startsWith('@') || !f.dir) continue; // spot
+      const closing = f.dir.startsWith('Close') || f.dir.includes('>') || !!f.liquidation;
+      if (!closing || f.dir.startsWith('Open')) continue;
+      const k = `${f.coin}|${f.oid}`;
+      groups.set(k, [...(groups.get(k) ?? []), f]);
+    }
+
+    const out: ClosedTrade[] = [];
+    for (const [k, g] of groups) {
+      const f0 = g[0];
+      const side: 'long' | 'short' = /^Close Long|^Long >/.test(f0.dir) ? 'long' : /^Close Short|^Short >/.test(f0.dir) ? 'short'
+        : num(f0.startPosition) > 0 ? 'long' : 'short';
+      // A flip fill closes only the previous position
+      const closedSz = (f: HLFill) => (f.dir.includes('>') ? Math.min(num(f.sz), Math.abs(num(f.startPosition))) : num(f.sz));
+      const qty = g.reduce((s, f) => s + closedSz(f), 0);
+      if (!(qty > 0)) continue;
+      const exit = g.reduce((s, f) => s + num(f.px) * closedSz(f), 0) / qty;
+      const gross = g.reduce((s, f) => s + num(f.closedPnl), 0);
+      const fees = -g.reduce((s, f) => s + num(f.fee), 0);
+      const dir = side === 'long' ? 1 : -1;
+      const time = Math.max(...g.map((f) => f.time));
+      out.push(this.trade({
+        id: `hl:${k}`,
+        symbol: f0.coin,
+        side,
+        entryPrice: exit - gross / (qty * dir),
+        exitPrice: exit,
+        quantity: qty,
+        pnl: gross + fees,
+        fees,
+        entryTime: null,
+        exitTime: time,
+        category: hlCategory(f0.coin),
+      }));
+    }
+    return out;
+  }
+
+  /**
+   * Account value history from the `portfolio` endpoint (exact, incl. unrealized PnL): allTime is
+   * weekly, month / week / day get finer, so each range is taken from the finest series covering it.
+   */
+  async fetchEquityHistory(): Promise<Array<{ t: number; v: number }>> {
+    type Series = { accountValueHistory: Array<[number, string]> };
+    const rows = await this.post<Array<[string, Series]>>({ type: 'portfolio', user: this.address });
+    const by = new Map(rows.map(([name, s]) => [name, (s.accountValueHistory ?? []).map(([t, v]) => ({ t, v: num(v) }))]));
+    const out: Array<{ t: number; v: number }> = [];
+    let until = Infinity;
+    for (const name of ['day', 'week', 'month', 'allTime']) {
+      const list = by.get(name) ?? [];
+      const part = list.filter((p) => p.t < until && Number.isFinite(p.v));
+      out.unshift(...part);
+      if (list.length) until = Math.min(until, list[0].t);
+    }
+    return out;
+  }
+
+  private async post<T>(body: Record<string, unknown>): Promise<T> {
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`${body.type} ${res.status}: ${(await res.text()).substring(0, 200)}`);
+    return res.json() as Promise<T>;
   }
 
   private async info<T>(type: string): Promise<T> {
@@ -224,4 +304,14 @@ export class HyperliquidConnector extends BaseConnector {
     if (!res.ok) throw new Error(`Spot API ${res.status}: ${await res.text()}`);
     return res.json() as Promise<HLSpotState>;
   }
+}
+
+interface HLFill {
+  coin: string; px: string; sz: string; side: 'A' | 'B'; time: number; startPosition: string; dir: string;
+  closedPnl: string; oid: number; fee: string; liquidation?: unknown;
+}
+/** HIP-3 builder dexes ("xyz:NVDA") list stocks, indices and a few commodities; the main dex is crypto */
+function hlCategory(coin: string): TradeCategory {
+  if (!coin.includes(':')) return guessCategory(coin) === 'xau' ? 'xau' : 'crypto';
+  return guessCategory(coin) === 'xau' ? 'xau' : 'stock';
 }

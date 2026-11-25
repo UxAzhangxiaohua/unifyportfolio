@@ -11,6 +11,7 @@ import { CfdPanel } from './components/CfdPanel';
 import { OptionExitCalculator } from './components/OptionExitCalculator';
 import { OtherHoldings } from './components/OtherHoldings';
 import { TradesHistory } from './components/TradesHistory';
+import { PayoutsPanel } from './components/PayoutsPanel';
 import { TransfersPanel } from './components/TransfersPanel';
 import { tr, locale, useLang } from './lib/i18n';
 
@@ -58,6 +59,7 @@ export default function App() {
       <TransfersPanel />
       <OtherHoldings accounts={data.accounts} />
       <TradesHistory />
+      <PayoutsPanel />
       <footer className="text-center text-text-muted text-[11px] pb-4">
         {tr('每 15 秒自动刷新', 'Auto-refresh every 15s')}{dataUpdatedAt > 0 && <> · {new Date(dataUpdatedAt).toLocaleTimeString(locale(), { hour12: false })}</>} · {tr('只读 API', 'Read-only API')}
       </footer>

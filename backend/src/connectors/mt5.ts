@@ -4,6 +4,8 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BaseConnector } from './base.js';
 import type { AccountSnapshot, CfdAccountState, MT5Credentials, Position } from '../types.js';
+import { tradesObserveMt5, type Mt5Deal } from '../trades.js';
+import { backfillObserveBalanceOps } from '../backfill.js';
 
 // MT5 accounts (investor / read-only password) via the mt5bridge Go helper
 // (mt5bridge/, built on github.com/voorz/mtapi). Each poll spawns one short-lived
@@ -15,6 +17,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // src/connectors or dist/connectors → <repo>/mt5bridge/bin/mt5snap
 const BIN = process.env.MT5SNAP_BIN || resolve(__dirname, '../../../mt5bridge/bin/mt5snap');
 const TIMEOUT_MS = 55_000;
+/** Deal history window: long on the first poll (back-fill + entry deals of open positions), then short */
+const DEALS_FIRST_DAYS = 90;
+const DEALS_ROLLING_DAYS = 3;
 
 interface BridgePosition {
   ticket: number;
@@ -47,9 +52,13 @@ interface BridgeSnapshot {
   marginEstimated: boolean;
   positions: BridgePosition[];
   warnings: string[];
+  /** Trading deals since `dealsSince`; absent when the history query failed */
+  deals?: Mt5Deal[];
+  /** Deposits / withdrawals / corrections (USD, + in / − out) */
+  balanceOps?: Array<{ ticket: number; amountUsd: number; comment: string; time: number }>;
 }
 
-function runBridge(creds: MT5Credentials): Promise<BridgeSnapshot> {
+function runBridge(creds: MT5Credentials, dealsSince: number): Promise<BridgeSnapshot> {
   return new Promise((resolvePromise, reject) => {
     if (!existsSync(BIN)) {
       reject(new Error(`mt5snap binary not found at ${BIN} — build it: cd mt5bridge && go build -o bin/mt5snap .`));
@@ -88,6 +97,7 @@ function runBridge(creds: MT5Credentials): Promise<BridgeSnapshot> {
       password: creds.password,
       server: creds.server,
       host: creds.host ?? '',
+      dealsSince,
     }));
   });
 }
@@ -108,6 +118,7 @@ function publicError(msg: string): string {
 
 export class MT5Connector extends BaseConnector {
   private running: Promise<AccountSnapshot> | null = null;
+  private dealsPrimed = false;
 
   async fetch(): Promise<AccountSnapshot> {
     // A slow login must not stack up processes
@@ -117,7 +128,17 @@ export class MT5Connector extends BaseConnector {
 
   private async fetchOnce(): Promise<AccountSnapshot> {
     try {
-      const s = await runBridge(this.account.credentials as MT5Credentials);
+      const days = this.dealsPrimed ? DEALS_ROLLING_DAYS : DEALS_FIRST_DAYS;
+      const since = Math.floor(Date.now() / 1000) - days * 86_400;
+      const s = await runBridge(this.account.credentials as MT5Credentials, since);
+      // Deposits / withdrawals for the equity backfill (complete from the first, deep query on)
+      if (s.balanceOps && (this.dealsPrimed || s.deals)) backfillObserveBalanceOps(this.account.id, since * 1000, s.balanceOps);
+      try {
+        tradesObserveMt5(this.account.id, this.account.exchange, s.positions.map((p) => ({ ticket: p.ticket, side: p.side, openPrice: p.openPrice })), s.deals ?? null);
+        if (s.deals) this.dealsPrimed = true;
+      } catch (e) {
+        console.error(`[mt5] ${this.account.id}: trade tracking failed: ${e instanceof Error ? e.message : e}`);
+      }
 
       const positions: Position[] = s.positions.map((p) => ({
         symbol: p.symbol,

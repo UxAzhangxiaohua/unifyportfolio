@@ -134,6 +134,25 @@ export interface TransferView {
   /** ms */
   startedAt: number;
   arrivedAt: number | null;
+  /** Withdrawal to a configured cash-out address */
+  payout?: boolean;
+}
+
+export interface PayoutView {
+  id: string;
+  account: string;
+  coin: string;
+  amount: number;
+  fee: number;
+  network: string | null;
+  status: 'pending' | 'done' | 'failed';
+  /** ms */
+  time: number;
+}
+
+export interface PayoutsResponse {
+  configured: boolean;
+  payouts: PayoutView[];
 }
 
 export interface TransfersResponse {
@@ -160,6 +179,10 @@ export interface HistoryResponse {
   pnl: number;
   pnlPercent: number;
   period: string;
+  /** Trading scope: points before this unix time use an estimated earn/funding breakdown */
+  estimatedBefore?: number;
+  /** Total scope: points before this unix time are reconstructed (before the first recorded sample) */
+  backfilledBefore?: number;
 }
 
 export interface MetricsResponse {
@@ -172,6 +195,10 @@ export interface MetricsResponse {
 
 export type TimePeriod = '1h' | '4h' | '24h' | '1w' | '30d' | 'all';
 
+/** xau = gold (and any other commodity / FX); stock includes index contracts (NAS100, USTEC) */
+export type TradeCategory = 'stock' | 'crypto' | 'xau' | 'option';
+
+
 export interface ClosedTrade {
   id: string;
   accountId: string;
@@ -183,20 +210,16 @@ export interface ClosedTrade {
   quantity: number;
   realizedPnl: number;
   pnlPercent: number;
-  entryTime: string;
+  /** null when the venue's close record doesn't say when the position was opened */
+  entryTime: string | null;
   exitTime: string;
-  durationSeconds: number;
-}
-
-export interface TradeSummary {
-  totalTrades: number;
-  wins: number;
-  losses: number;
-  winRate: number;
-  totalRealizedPnl: number;
+  durationSeconds: number | null;
+  category?: TradeCategory;
+  /** venue = the venue's own trade / closed-position history (exact, net of fees); inferred = from position changes */
+  source?: 'venue' | 'inferred';
+  fees?: number;
 }
 
 export interface TradesResponse {
   trades: ClosedTrade[];
-  summary: TradeSummary;
 }

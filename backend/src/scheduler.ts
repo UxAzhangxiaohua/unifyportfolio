@@ -11,6 +11,8 @@ import { cacheSet } from './cache.js';
 import { checkMarginAlerts, initAlerts } from './alerts.js';
 import { STALE_MARKER } from './connectors/base.js';
 import { transfersObserve, transfersSince } from './transfers.js';
+import { tradesObserveVenue, tradesSince } from './trades.js';
+import { BACKFILL_DAYS, backfillSetNative, coverageGet, coverageMark } from './backfill.js';
 
 function createConnector(account: AccountConfig): BaseConnector {
   switch (account.exchange) {
@@ -54,6 +56,67 @@ async function fetchAndCache(connector: BaseConnector, accountId: string): Promi
   checkMarginAlerts(snapshot);
 }
 
+const TRADES_INTERVAL_MS = 5 * 60_000;
+const tradeErrors = new Map<string, string>();
+const tradesRunning = new Set<string>();
+
+/** Closed-trade history from the venue (exact fills / closed positions); see trades.ts */
+async function fetchTrades(connector: BaseConnector, accountId: string): Promise<void> {
+  if (tradesRunning.has(accountId)) return;
+  tradesRunning.add(accountId);
+  try {
+    const since = tradesSince(accountId);
+    const list = await connector.fetchClosedTrades(since);
+    if (list) tradesObserveVenue(accountId, list, since);
+    if (tradeErrors.has(accountId)) console.log(`[trades] ${accountId}: closed-trade history recovered`);
+    tradeErrors.delete(accountId);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (tradeErrors.get(accountId) !== msg) console.error(`[trades] ${accountId}: ${msg.substring(0, 300)}`);
+    tradeErrors.set(accountId, msg);
+  } finally {
+    tradesRunning.delete(accountId);
+  }
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * One-time deep read of deposits/withdrawals (BACKFILL_DAYS, in 7-day windows — Bybit's limit) so
+ * the equity backfill can walk balances back (backfill.ts). Persisted: runs again only if the
+ * account was never read that far back.
+ */
+async function deepFlows(connector: BaseConnector, accountId: string): Promise<void> {
+  const now = Date.now();
+  const target = now - BACKFILL_DAYS * DAY_MS;
+  const have = coverageGet('flows', accountId);
+  if (have != null && have <= target + DAY_MS) return;
+  try {
+    let n = 0;
+    for (let end = now; end > target; end -= 7 * DAY_MS) {
+      const start = Math.max(target, end - 7 * DAY_MS + 60_000);
+      const list = await connector.fetchFlows(start, end);
+      if (list == null) return; // venue has no flow history
+      transfersObserve(accountId, list, Date.now(), true);
+      n += list.length;
+    }
+    coverageMark('flows', accountId, target);
+    console.log(`[backfill] ${accountId}: deposits/withdrawals read ${BACKFILL_DAYS} d back (${n} record(s))`);
+  } catch (err) {
+    console.error(`[backfill] ${accountId}: deep flow read failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** Venue account-value history (where available), refreshed every few hours */
+async function equityHistory(connector: BaseConnector, accountId: string): Promise<void> {
+  try {
+    const pts = await connector.fetchEquityHistory();
+    if (pts?.length) backfillSetNative(accountId, pts);
+  } catch (err) {
+    console.error(`[backfill] ${accountId}: equity history failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 export function startScheduler(config: AppConfig): void {
   initAlerts(config.alerts);
   const connectors = config.accounts.map((a) => ({
@@ -86,6 +149,20 @@ export function startScheduler(config: AppConfig): void {
         // Then repeat at interval
         setInterval(() => fetchAndCache(connector, id), intervalMs);
       }, staggerMs);
+
+      // Closed trades: after the first balance fetch (connectors detect their account mode there)
+      if (exchange !== 'mt5' && exchange !== 'ibkr') {
+        setTimeout(() => {
+          fetchTrades(connector, id);
+          setInterval(() => fetchTrades(connector, id), TRADES_INTERVAL_MS);
+        }, 20_000 + staggerMs * 3);
+        // Equity backfill inputs (backfill.ts)
+        setTimeout(() => deepFlows(connector, id), 40_000 + staggerMs * 5);
+        setTimeout(() => {
+          equityHistory(connector, id);
+          setInterval(() => equityHistory(connector, id), 3 * 3_600_000);
+        }, 10_000 + staggerMs);
+      }
     });
 
     console.log(`[scheduler] ${exchange}: ${group.length} account(s), interval ${intervalMs / 1000}s`);

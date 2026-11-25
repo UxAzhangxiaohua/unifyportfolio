@@ -21,6 +21,8 @@ const PERIODS: { key: TimePeriod; label: string }[] = [
 const PROFIT = '#2ecc8f';
 const LOSS = '#f2545b';
 const MUTED = '#5d6475';
+const EST_LINE = '#8a91a3';
+const EST_FILL = 'rgba(144,151,168,0.12)';
 
 // lightweight-charts renders UTCTimestamp as UTC; format in the viewer's local time instead
 const asDate = (t: Time) => new Date((t as number) * 1000);
@@ -68,7 +70,7 @@ export function EquityChart() {
       if (peak - p.v > dd) { dd = peak - p.v; ddPct = peak > 0 ? (dd / peak) * 100 : 0; }
     }
     return { start, end, hi, lo, dd, ddPct, from: points[0].t };
-  }, [points]);
+  }, [points, history?.backfilledBefore]);
 
   // Create chart once
   useEffect(() => {
@@ -151,7 +153,11 @@ export function EquityChart() {
 
     const start = points[0].v;
     series.applyOptions({ baseValue: { type: 'price', price: start } });
-    series.setData(points.map((p) => ({ time: p.t as UTCTimestamp, value: p.v })));
+    // Reconstructed points (before the first recorded sample) are drawn muted
+    const estBefore = history?.backfilledBefore ?? 0;
+    series.setData(points.map((p) => (p.t < estBefore
+      ? { time: p.t as UTCTimestamp, value: p.v, topLineColor: EST_LINE, bottomLineColor: EST_LINE, topFillColor1: EST_FILL, topFillColor2: 'rgba(144,151,168,0.01)', bottomFillColor1: 'rgba(144,151,168,0.01)', bottomFillColor2: EST_FILL }
+      : { time: p.t as UTCTimestamp, value: p.v })));
     baseLineRef.current = series.createPriceLine({
       price: start, color: MUTED, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: '',
     });
@@ -220,7 +226,10 @@ export function EquityChart() {
               top: Math.max(hover.y - 70, 4),
             }}
           >
-            <div className="text-text-muted num">{fmtFull(hover.t)}</div>
+            <div className="text-text-muted num">
+              {fmtFull(hover.t)}
+              {history?.backfilledBefore != null && hover.t < history.backfilledBefore && <span className="ml-1.5 text-delayed">{tr('估算', 'estimate')}</span>}
+            </div>
             <div className="num text-[14px] font-semibold text-text-primary">{fmtUSD(hover.v)}</div>
             <div className={`num ${pnlClass(hover.v - stats.start)}`}>
               {fmtSigned(hover.v - stats.start)} · {fmtPct(stats.start > 0 ? ((hover.v - stats.start) / stats.start) * 100 : 0)}
@@ -237,6 +246,25 @@ export function EquityChart() {
           </div>
         )}
       </div>
+
+      {stats && scope === 'trading' && history?.estimatedBefore != null && (
+        <div className="px-5 pb-1 -mt-1 text-[11px] text-text-muted">
+          {tr(
+            `${fmtFull(history.estimatedBefore)} 之前的交易账户值为估算（理财 + 资金账户余额按最早记录值扣除）`,
+            `Trading equity before ${fmtFull(history.estimatedBefore)} is estimated (earn + funding taken at their earliest recorded value)`,
+          )}
+        </div>
+      )}
+
+      {stats && scope === 'total' && history?.backfilledBefore != null && (
+        <div className="px-5 pb-1 -mt-1 text-[11px] text-text-muted">
+          <span className="inline-block w-3 h-[2px] align-middle mr-1.5" style={{ background: EST_LINE }} />
+          {tr(
+            `${fmtFull(history.backfilledBefore)} 之前（灰色）为补全的估算值：Hyperliquid 用交易所自带的账户价值历史，其余账户由平仓盈亏 + 稳定币充提倒推（不含当时持仓的浮盈亏、资金费和理财利息）`,
+            `Before ${fmtFull(history.backfilledBefore)} (grey) the curve is reconstructed: Hyperliquid from its own account-value history, other accounts walked back from closed-trade PnL + stablecoin deposits/withdrawals (excl. unrealized PnL at the time, funding and earn interest)`,
+          )}
+        </div>
+      )}
 
       {stats && (period === '1w' || period === '30d' || period === 'all') && (
         <div className="px-5 pb-3 -mt-1 text-[11px] text-text-muted">

@@ -1,5 +1,6 @@
-import type { FundFlow, TransferView, TransfersResponse } from './types.js';
+import type { FundFlow, PayoutsResponse, TransferView, TransfersResponse } from './types.js';
 import { flowsDbLoad, flowsDbUpsert } from './db.js';
+import { estimateFrom } from './backfill.js';
 
 // Internal-transfer bridging.
 //
@@ -15,7 +16,7 @@ import { flowsDbLoad, flowsDbUpsert } from './db.js';
 // found later (or a withdrawal later recognised as external) corrects the past curve too.
 // The fee is a real cost and remains as a small step.
 
-interface StoredFlow extends FundFlow {
+export interface StoredFlow extends FundFlow {
   accountId: string;
   /** ms: out = debit observed; in = unused (see doneSeenAt) */
   seenAt: number;
@@ -46,14 +47,30 @@ const flows = new Map<string, StoredFlow>();
 /** Accounts whose first flow load in this process has completed */
 const primed = new Set<string>();
 let ownAddresses = new Set<string>();
+/** User's own cash-out addresses (lower-cased) */
+let payoutAddrs = new Set<string>();
 let labels: Record<string, string> = {};
+/** sender address (lower-cased) → tracked account that sends from it without reporting withdrawals */
+let sources = new Map<string, string>();
+let firstSeen: (accountId: string) => number | null = () => null;
 let version = 0;
 
 const keyOf = (accountId: string, id: string) => `${accountId}|${id}`;
 
-export function transfersInit(opts: { ownAddresses: string[]; labels: Record<string, string> }): void {
+export function transfersInit(opts: {
+  ownAddresses: string[];
+  labels: Record<string, string>;
+  sources?: Record<string, string>;
+  payoutAddresses?: string[];
+  /** unix seconds of an account's first history sample (history.ts) */
+  firstSeen?: (accountId: string) => number | null;
+}): void {
   ownAddresses = new Set(opts.ownAddresses.map((a) => a.toLowerCase()));
   labels = opts.labels;
+  payoutAddrs = new Set((opts.payoutAddresses ?? []).map((a) => a.trim().toLowerCase()));
+  sources = new Map(Object.entries(opts.sources ?? {}).map(([addr, id]) => [addr.trim().toLowerCase(), id]));
+  if (opts.firstSeen) firstSeen = opts.firstSeen;
+  if (sources.size) console.log(`[transfers] ${sources.size} sender address(es) mapped to tracked accounts`);
   for (const f of flowsDbLoad<StoredFlow>()) flows.set(keyOf(f.accountId, f.id), f);
   if (flows.size) console.log(`[transfers] loaded ${flows.size} deposit/withdrawal record(s)`);
 }
@@ -68,9 +85,10 @@ export function transfersSince(accountId: string, now = Date.now()): number {
  * Records first seen on this process's first load (i.e. that happened while we weren't watching)
  * get venue timestamps; anything appearing later gets the observation time.
  */
-export function transfersObserve(accountId: string, list: FundFlow[], now = Date.now()): void {
-  const first = !primed.has(accountId);
-  primed.add(accountId);
+export function transfersObserve(accountId: string, list: FundFlow[], now = Date.now(), historical = false): void {
+  // historical: a deep back-fill query — records it finds for the first time get venue timestamps
+  const first = historical || !primed.has(accountId);
+  if (!historical) primed.add(accountId);
   for (const f of list) {
     if (!(f.amount > 0)) continue;
     const key = keyOf(accountId, f.id);
@@ -124,6 +142,12 @@ function build(now: number): Built {
       continue;
     }
 
+    // Cash-out: a real outflow, never paired with a same-amount deposit elsewhere
+    if (isPayout(o)) {
+      views.push({ ...base, state: 'external_out', amount: o.amount, toAccount: null, arrivedAt: null, payout: true });
+      continue;
+    }
+
     const tol = Math.max(0.05, o.amount * 0.003);
     const candidates = ins.filter((i) => !used.has(i) && i.accountId !== o.accountId && i.coin === o.coin);
     const match =
@@ -150,6 +174,26 @@ function build(now: number): Built {
     } else {
       views.push({ ...base, state: 'external_out', amount: o.amount, toAccount: null, arrivedAt: null });
     }
+  }
+
+  // Deposits sent from a known address of a tracked account that reports no withdrawals itself
+  // (MT5 broker payouts): an internal transfer from that account. Its debit isn't observable, so the
+  // bridge runs from the deposit's venue time — or, when the source account wasn't tracked yet at
+  // that time, from the start of history (its backfilled value is the post-withdrawal balance).
+  for (const i of ins) {
+    if (used.has(i) || !i.from) continue;
+    const src = sources.get(i.from);
+    if (!src || src === i.accountId) continue;
+    used.add(i);
+    const tracked = firstSeen(src);
+    // The source's pre-history estimate (backfill.ts) already includes the withdrawal
+    const est = estimateFrom(src);
+    const start = (tracked != null && tracked * 1000 <= i.time) || (est != null && est <= i.time) ? i.time : 0;
+    if (i.doneSeenAt! > start) events.push({ t: start, delta: i.amount }, { t: i.doneSeenAt!, delta: -i.amount });
+    views.push({
+      id: `${i.accountId}|${i.id}`, state: 'completed', coin: i.coin, amount: i.amount, fee: 0,
+      fromAccount: src, toAccount: i.accountId, network: i.network, startedAt: i.time, arrivedAt: i.doneTime ?? i.time,
+    });
   }
 
   for (const i of ins) {
@@ -187,6 +231,23 @@ export function transitAt(tMs: number, now = Date.now()): number {
 export function transitAdjuster(now = Date.now()): (tSec: number) => number {
   build(now);
   return (tSec) => transitAt(tSec * 1000, now);
+}
+
+/** Recorded flows of one account (for the equity backfill) */
+export function flowsForAccount(accountId: string): StoredFlow[] {
+  return [...flows.values()].filter((f) => f.accountId === accountId);
+}
+
+const isPayout = (f: StoredFlow) => f.direction === 'out' && !!f.address && payoutAddrs.has(f.address.toLowerCase());
+
+/** All recorded withdrawals to the cash-out addresses, newest first. The address is not exposed */
+export function payoutsGet(): PayoutsResponse {
+  const label = (id: string) => labels[id] ?? id;
+  const payouts = [...flows.values()].filter(isPayout).sort((a, b) => b.time - a.time).map((f) => ({
+    id: `${f.accountId}|${f.id}`, account: label(f.accountId), coin: f.coin, amount: f.amount, fee: f.fee,
+    network: f.network, status: f.status, time: f.time,
+  }));
+  return { configured: payoutAddrs.size > 0, payouts };
 }
 
 export function transfersGet(now = Date.now()): TransfersResponse {

@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { applyFunding, BaseConnector, cachedPublic, lower, num, stableCoin, type FundingQuote } from './base.js';
-import type { AccountConfig, AccountSnapshot, BitgetCredentials, CfdAccountState, FundFlow, Position, StableBalance } from '../types.js';
+import type { AccountConfig, AccountSnapshot, BitgetCredentials, CfdAccountState, ClosedTrade, FundFlow, Position, StableBalance } from '../types.js';
+import { guessCategory } from '../categories.js';
 
 // Bitget: V2 API for classic accounts, V3 for Unified Accounts (auto-detected). Read-only key is sufficient.
 const BASE = 'https://api.bitget.com';
@@ -86,6 +87,74 @@ export class BitgetConnector extends BaseConnector {
 
   /** null = not yet detected */
   private unified: boolean | null = null;
+  private loggedClosedRow = false;
+
+  /**
+   * Closed positions: classic /api/v2/mix/position/history-position (productType), unified
+   * /api/v3/position/history-position (category); 3 months back, cursor-paged. Field names differ
+   * between the two (and the V3 shape is unverified: no closed rows on the account so far), so
+   * several spellings are accepted and the first raw row is logged once.
+   */
+  async fetchClosedTrades(sinceMs: number): Promise<ClosedTrade[] | null> {
+    if (this.unified == null) return null; // account mode not detected yet (first fetch pending)
+    const out: ClosedTrade[] = [];
+    const now = Date.now();
+    for (const productType of ['USDT-FUTURES', 'USDC-FUTURES', 'COIN-FUTURES']) {
+      const rows: Record<string, unknown>[] = [];
+      let cursor = '';
+      for (let page = 0; page < 20; page++) {
+        const params: Record<string, string> = { startTime: String(sinceMs), endTime: String(now), limit: '100' };
+        let list: Record<string, unknown>[];
+        let next = '';
+        if (this.unified) {
+          const r = await this.signedGet<{ list: Record<string, unknown>[] | null; cursor?: string | null }>(
+            '/api/v3/position/history-position', { ...params, category: productType, ...(cursor ? { cursor } : {}) });
+          list = r.list ?? [];
+          next = r.cursor ?? '';
+        } else {
+          const r = await this.signedGet<{ list: Record<string, unknown>[] | null; endId?: string | null }>(
+            '/api/v2/mix/position/history-position', { ...params, productType, ...(cursor ? { idLessThan: cursor } : {}) });
+          list = r.list ?? [];
+          next = r.endId ?? '';
+        }
+        rows.push(...list);
+        if (list.length < 100 || !next || next === cursor) break;
+        cursor = next;
+      }
+      for (const r of rows) {
+        if (!this.loggedClosedRow) {
+          this.loggedClosedRow = true;
+          console.log(`[bitget] ${this.account.id}: first closed-position row: ${JSON.stringify(r).substring(0, 600)}`);
+        }
+        const pick = (...keys: string[]) => { for (const k of keys) if (r[k] != null && r[k] !== '') return r[k]; return undefined; };
+        const entry = num(pick('openAvgPrice', 'openPriceAvg', 'avgOpenPrice', 'openPrice'));
+        const exit = num(pick('closeAvgPrice', 'closePriceAvg', 'avgClosePrice', 'closePrice'));
+        const qty = num(pick('closeTotalPos', 'closeSize', 'closedSize', 'size', 'totalPos'));
+        const exitTime = num(pick('utime', 'uTime', 'updatedTime', 'updateTime', 'ctime'));
+        if (!(entry > 0 && exit > 0 && qty > 0 && exitTime > 0)) continue;
+        const symbol = String(pick('symbol') ?? '');
+        const fees = num(pick('openFee')) + num(pick('closeFee')) + num(pick('totalFunding', 'fundingFee'));
+        const net = pick('netProfit', 'netPnl', 'achievedProfits');
+        const pnl = net != null ? num(net) : num(pick('pnl', 'realizedPnl')) + fees;
+        const holdSide = String(pick('holdSide', 'posSide', 'side') ?? '').toLowerCase();
+        out.push(this.trade({
+          id: `bitget:${pick('positionId', 'id') ?? `${symbol}:${exitTime}`}`,
+          symbol,
+          side: holdSide.includes('short') || holdSide === 'sell' ? 'short' : 'long',
+          entryPrice: entry,
+          exitPrice: exit,
+          quantity: qty,
+          pnl,
+          // Bitget reports fees as negative numbers
+          fees,
+          entryTime: num(pick('ctime', 'cTime', 'createdTime')) || null,
+          exitTime,
+          category: guessCategory(symbol),
+        }));
+      }
+    }
+    return out;
+  }
 
   async fetch(): Promise<AccountSnapshot> {
     try {
@@ -349,8 +418,8 @@ export class BitgetConnector extends BaseConnector {
    * gross incl. fee, `fee` is negative, `recordId` is the chain tx hash). Classic: V2 wallet records
    * (same field semantics assumed; not verified against a classic account).
    */
-  async fetchFlows(sinceMs: number): Promise<FundFlow[]> {
-    const params = { startTime: String(sinceMs), endTime: String(Date.now()), limit: '100' };
+  async fetchFlows(sinceMs: number, untilMs = Date.now()): Promise<FundFlow[]> {
+    const params = { startTime: String(sinceMs), endTime: String(untilMs), limit: '100' };
     let unified = this.unified;
     let rows: [BitgetFlowRow[], BitgetFlowRow[]];
     if (unified !== true) {

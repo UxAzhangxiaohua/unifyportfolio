@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { applyFunding, BaseConnector, cachedPublic, lower, num, parseOptionSymbol, stableCoin, type FundingQuote } from './base.js';
-import type { AccountConfig, AccountSnapshot, BybitCredentials, FundFlow, Position, StableBalance } from '../types.js';
+import type { AccountConfig, AccountSnapshot, BybitCredentials, ClosedTrade, FundFlow, Position, StableBalance, TradeCategory } from '../types.js';
+import { guessCategory } from '../categories.js';
 
 // Bybit V5 API (Unified Trading Account). Read-only key is sufficient.
 const BASE = 'https://api.bybit.com';
@@ -28,6 +29,21 @@ interface BybitWallet {
   totalInitialMargin: string;
   accountIMRate: string;
   coin: BybitCoin[];
+}
+
+/** /v5/position/closed-pnl row: one per closing order (closedPnl is net of open + close fees) */
+interface BybitClosedPnl {
+  symbol: string;
+  orderId: string;
+  side: 'Buy' | 'Sell'; // side of the closing order: Buy closes a short
+  closedSize: string;
+  avgEntryPrice: string;
+  avgExitPrice: string;
+  closedPnl: string;
+  openFee?: string;
+  closeFee?: string;
+  createdTime: string;
+  updatedTime: string;
 }
 
 interface BybitPosition {
@@ -274,8 +290,8 @@ export class BybitConnector extends BaseConnector {
   }
 
   /** On-chain + off-chain withdrawals and on-chain deposits. Query window is capped at 7 days. */
-  async fetchFlows(sinceMs: number): Promise<FundFlow[]> {
-    const endTime = Date.now();
+  async fetchFlows(sinceMs: number, untilMs = Date.now()): Promise<FundFlow[]> {
+    const endTime = untilMs;
     const range = { startTime: String(Math.max(sinceMs, endTime - 7 * 86_400_000 + 60_000)), endTime: String(endTime), limit: '50' };
     const [wd, dep] = await Promise.all([
       this.signedGet<{ rows: BybitWithdrawal[] }>('/v5/asset/withdraw/query-record', { ...range, withdrawType: '2' }),
@@ -305,6 +321,66 @@ export class BybitConnector extends BaseConnector {
       });
     }
     return flows;
+  }
+
+  /**
+   * Closed positions: /v5/position/closed-pnl (linear + option; ≤ 7 days per query, 2 years back).
+   */
+  async fetchClosedTrades(sinceMs: number): Promise<ClosedTrade[]> {
+    const types = await this.linearSymbolTypes().catch(() => new Map<string, string>());
+    const out: ClosedTrade[] = [];
+    for (const category of ['linear', 'option'] as const) {
+      for (let end = Date.now(); end > sinceMs; end -= 7 * DAY) {
+        const start = Math.max(sinceMs, end - 7 * DAY + 1000);
+        const rows = await this.paged<BybitClosedPnl>('/v5/position/closed-pnl', { category, startTime: String(start), endTime: String(end) });
+        for (const r of rows) {
+          const fees = -(num(r.openFee) + num(r.closeFee));
+          out.push(this.trade({
+            id: `bybit:${category}:${r.orderId}:${r.updatedTime}`,
+            symbol: r.symbol,
+            side: r.side === 'Buy' ? 'short' : 'long',
+            entryPrice: num(r.avgEntryPrice),
+            exitPrice: num(r.avgExitPrice),
+            quantity: num(r.closedSize),
+            pnl: num(r.closedPnl),
+            fees,
+            entryTime: null,
+            exitTime: num(r.updatedTime),
+            category: category === 'option' ? 'option' : bybitCategory(r.symbol, types.get(r.symbol)),
+          }));
+        }
+      }
+    }
+    return out;
+  }
+
+  /** All rows of a cursor-paginated list endpoint */
+  private async paged<T>(path: string, params: Record<string, string>): Promise<T[]> {
+    const all: T[] = [];
+    let cursor = '';
+    for (let page = 0; page < 20; page++) {
+      const r = await this.signedGet<{ list: T[]; nextPageCursor?: string }>(path, { ...params, limit: '100', ...(cursor ? { cursor } : {}) });
+      all.push(...(r.list ?? []));
+      if (!r.nextPageCursor || (r.list ?? []).length < 100) break;
+      cursor = r.nextPageCursor;
+    }
+    return all;
+  }
+
+  /** symbol → symbolType ('stock', 'ETF', 'commodity', 'forex', 'innovation', '') */
+  private linearSymbolTypes(): Promise<Map<string, string>> {
+    return cachedPublic('bybit:symbolTypes', 6 * 3_600_000, async () => {
+      const m = new Map<string, string>();
+      let cursor = '';
+      for (let page = 0; page < 10; page++) {
+        const r = await this.publicGet<{ list: Array<{ symbol: string; symbolType?: string }>; nextPageCursor?: string }>(
+          '/v5/market/instruments-info', { category: 'linear', limit: '1000', ...(cursor ? { cursor } : {}) });
+        for (const i of r.list) m.set(i.symbol, i.symbolType ?? '');
+        if (!r.nextPageCursor) break;
+        cursor = r.nextPageCursor;
+      }
+      return m;
+    });
   }
 
   private async fundingQuotes(symbols: string[]): Promise<Map<string, FundingQuote>> {
@@ -407,5 +483,14 @@ export class BybitConnector extends BaseConnector {
       throw new Error(`Bybit ${path} retCode ${body.retCode}: ${body.retMsg}`);
     }
     return body.result;
+  }
+}
+
+function bybitCategory(symbol: string, symbolType: string | undefined): TradeCategory {
+  switch (symbolType) {
+    case 'stock': case 'ETF': return 'stock';
+    case 'commodity': case 'forex': return 'xau';
+    case undefined: return guessCategory(symbol);
+    default: return guessCategory(symbol) === 'xau' ? 'xau' : 'crypto';
   }
 }

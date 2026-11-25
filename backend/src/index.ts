@@ -6,11 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { startScheduler } from './scheduler.js';
 import { cacheGetAll, cacheGet, cacheGetHealth } from './cache.js';
-import { startHistorySampler, historyGet, historyAccounts, metricsGet, historyInit } from './history.js';
+import { startHistorySampler, historyGet, historyAccounts, metricsGet, historyInit, historySetBackfill, historyFirstSeen } from './history.js';
 import { historyDbClose } from './db.js';
-import { tradesGet } from './trades.js';
-import { transfersGet, transfersInit, transitAt } from './transfers.js';
-import type { HyperliquidCredentials, PortfolioResponse, TransfersResponse } from './types.js';
+import { tradesGet, tradesInit } from './trades.js';
+import { payoutsGet, transfersGet, transfersInit, transitAt } from './transfers.js';
+import { registerMcp } from './mcp.js';
+import type { HyperliquidCredentials, PayoutsResponse, PortfolioResponse, TransfersResponse } from './types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.BACKEND_PORT) || 8189;
@@ -24,6 +25,7 @@ await app.register(cors, {
 // Try to load config and start scheduler
 const configPath = process.env.CONFIG_PATH || resolve(__dirname, '../../accounts.json');
 let configLoaded = false;
+let mcpToken: string | undefined;
 
 if (process.env.MOCK === '1') {
   console.warn('MOCK=1 — serving mock data');
@@ -32,11 +34,17 @@ if (process.env.MOCK === '1') {
     const config = loadConfig();
     // History store must be open before transfers load their records and the scheduler starts
     await historyInit();
+    historySetBackfill(config.historyBackfill);
+    tradesInit();
     transfersInit({
       // A Hyperliquid withdrawal lands at the same address on Arbitrum, so it's one of "our" addresses
       ownAddresses: config.accounts.filter((a) => a.exchange === 'hyperliquid').map((a) => (a.credentials as HyperliquidCredentials).walletAddress),
       labels: Object.fromEntries(config.accounts.map((a) => [a.id, a.label])),
+      sources: config.transferSources,
+      payoutAddresses: config.payoutAddresses,
+      firstSeen: historyFirstSeen,
     });
+    mcpToken = config.mcp?.token;
     startScheduler(config);
     startHistorySampler(() => cacheGetAll(), 30_000, config.accounts.map((a) => a.id));
     configLoaded = true;
@@ -104,6 +112,12 @@ app.get('/api/trades', async () => {
   return tradesGet();
 });
 
+// Withdrawals to the user's cash-out addresses (all on record)
+app.get('/api/payouts', async (): Promise<PayoutsResponse> => {
+  if (!configLoaded) return { configured: false, payouts: [] };
+  return payoutsGet();
+});
+
 // Deposits/withdrawals and internal transfers (last 14 days)
 app.get('/api/transfers', async (): Promise<TransfersResponse> => {
   if (!configLoaded) return { inTransit: 0, transfers: [] };
@@ -125,7 +139,10 @@ app.get<{ Params: { accountId: string } }>('/api/portfolio/:accountId', async (r
   return snapshot;
 });
 
-app.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
+// Read-only MCP server for Claude (mcp.ts)
+registerMcp(app, mcpToken);
+
+app.listen({ port: PORT, host: process.env.BIND_HOST || '0.0.0.0' }, (err) => {
   if (err) {
     app.log.error(err);
     process.exit(1);

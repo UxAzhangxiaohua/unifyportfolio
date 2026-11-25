@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { applyFunding, BaseConnector, cachedPublic, lower, num, parseOptionSymbol, stableCoin, type FundingQuote } from './base.js';
-import type { AccountConfig, AccountSnapshot, BinanceCredentials, FundFlow, Position, StableBalance } from '../types.js';
+import type { AccountConfig, AccountSnapshot, BinanceCredentials, ClosedTrade, FundFlow, Position, StableBalance, TradeCategory } from '../types.js';
+import { guessCategory } from '../categories.js';
 
 const SPOT_BASE = 'https://api.binance.com';
 const FUTURES_BASE = 'https://fapi.binance.com';
@@ -56,6 +57,8 @@ interface BinanceWithdrawal {
 interface BinanceDeposit {
   id: string; amount: string; coin: string; status: number; address: string; txId?: string;
   insertTime: number; completeTime?: number; network?: string;
+  /** Sender address, returned with includeSource=true */
+  sourceAddress?: string;
 }
 /** "2026-11-23 13:42:55" (UTC) → ms */
 const binanceTime = (s: string | undefined) => (s ? Date.parse(`${s.replace(' ', 'T')}Z`) || 0 : 0);
@@ -212,11 +215,13 @@ export class BinanceConnector extends BaseConnector {
    * Verified live: withdrawal `amount` is what the recipient gets (fee charged on top);
    * txId matches the receiving venue's deposit txId.
    */
-  async fetchFlows(sinceMs: number): Promise<FundFlow[]> {
-    const startTime = String(Math.max(sinceMs, Date.now() - 89 * 86_400_000));
+  async fetchFlows(sinceMs: number, untilMs = Date.now()): Promise<FundFlow[]> {
+    // ≤ 90 days per query
+    const startTime = String(Math.max(sinceMs, untilMs - 89 * 86_400_000));
+    const endTime = String(untilMs);
     const [wd, dep] = await Promise.all([
-      this.signed<BinanceWithdrawal[]>(SPOT_BASE, '/sapi/v1/capital/withdraw/history', { startTime }),
-      this.signed<BinanceDeposit[]>(SPOT_BASE, '/sapi/v1/capital/deposit/hisrec', { startTime }),
+      this.signed<BinanceWithdrawal[]>(SPOT_BASE, '/sapi/v1/capital/withdraw/history', { startTime, endTime }),
+      this.signed<BinanceDeposit[]>(SPOT_BASE, '/sapi/v1/capital/deposit/hisrec', { startTime, endTime, includeSource: 'true' }),
     ]);
     const flows: FundFlow[] = [];
     for (const w of wd) {
@@ -237,11 +242,120 @@ export class BinanceConnector extends BaseConnector {
       const status: FundFlow['status'] = d.status === 1 || d.status === 6 ? 'done' : d.status === 2 || d.status === 7 ? 'failed' : 'pending';
       flows.push({
         id: `in:${d.id}`, direction: 'in', coin, amount: num(d.amount), fee: 0,
-        txId: lower(d.txId), address: lower(d.address), network: d.network ?? null,
+        txId: lower(d.txId), address: lower(d.address), network: d.network ?? null, from: lower(d.sourceAddress),
         time: num(d.insertTime), doneTime: status === 'done' ? num(d.completeTime) || num(d.insertTime) : null, status,
       });
     }
     return flows;
+  }
+
+  /**
+   * Closed trades. USDⓈ-M: REALIZED_PNL income rows locate the closes (symbol + time, all symbols
+   * in one query), then /fapi/v1/userTrades (≤ 7 days per query) gives price, size and commission
+   * per fill; closing fills (realizedPnl ≠ 0) are grouped per order. Entry = exit − pnl ÷ size.
+   * Options: /eapi/v1/userTrades fills with realizedProfit ≠ 0, grouped per order (exercise at
+   * expiry is not included).
+   */
+  async fetchClosedTrades(sinceMs: number): Promise<ClosedTrade[]> {
+    const out: ClosedTrade[] = [];
+    const now = Date.now();
+    const WEEK = 7 * 86_400_000;
+
+    // 1. Where were closes? income history, paged by time
+    const windows = new Map<string, Set<number>>(); // symbol → window starts
+    let start = sinceMs;
+    for (let page = 0; page < 20; page++) {
+      const rows = await this.signed<BinanceIncome[]>(FUTURES_BASE, '/fapi/v1/income', { incomeType: 'REALIZED_PNL', startTime: String(start), endTime: String(now), limit: '1000' });
+      for (const r of rows) {
+        const w = sinceMs + Math.floor((r.time - sinceMs) / WEEK) * WEEK;
+        if (!windows.has(r.symbol)) windows.set(r.symbol, new Set());
+        windows.get(r.symbol)!.add(w);
+      }
+      if (rows.length < 1000) break;
+      start = rows[rows.length - 1].time + 1;
+    }
+
+    // 2. Fills for those symbols / weeks
+    if (windows.size) {
+      const meta = await this.futuresMeta().catch(() => new Map<string, { underlyingType: string; sub: string[] }>());
+      for (const [symbol, ws] of windows) {
+        const fills: BinanceUserTrade[] = [];
+        for (const w of ws) {
+          fills.push(...await this.signed<BinanceUserTrade[]>(FUTURES_BASE, '/fapi/v1/userTrades', {
+            symbol, startTime: String(w), endTime: String(Math.min(w + WEEK - 1, now)), limit: '1000',
+          }));
+        }
+        const byOrder = new Map<number, BinanceUserTrade[]>();
+        for (const f of fills) {
+          if (num(f.realizedPnl) === 0) continue;
+          byOrder.set(f.orderId, [...(byOrder.get(f.orderId) ?? []), f]);
+        }
+        for (const [orderId, g] of byOrder) {
+          const qty = g.reduce((s, f) => s + num(f.qty), 0);
+          if (!(qty > 0)) continue;
+          const exit = g.reduce((s, f) => s + num(f.price) * num(f.qty), 0) / qty;
+          const gross = g.reduce((s, f) => s + num(f.realizedPnl), 0);
+          // Commission in a stablecoin only (BNB-paid fees can't be valued here)
+          const fees = -g.reduce((s, f) => s + (stableCoin(f.commissionAsset) ? num(f.commission) : 0), 0);
+          const ps = g[0].positionSide;
+          const side: 'long' | 'short' = ps === 'LONG' ? 'long' : ps === 'SHORT' ? 'short' : g[0].side === 'SELL' ? 'long' : 'short';
+          const dir = side === 'long' ? 1 : -1;
+          out.push(this.trade({
+            id: `binance:um:${symbol}:${orderId}`,
+            symbol, side,
+            entryPrice: exit - gross / (qty * dir),
+            exitPrice: exit,
+            quantity: qty,
+            pnl: gross + fees,
+            fees,
+            entryTime: null,
+            exitTime: Math.max(...g.map((f) => f.time)),
+            category: binanceCategory(symbol, meta.get(symbol)),
+          }));
+        }
+      }
+    }
+
+    // 3. Options (an account without options access just has none)
+    const opt = await this.signed<BinanceOptionTrade[]>(OPTIONS_BASE, '/eapi/v1/userTrades', { startTime: String(sinceMs), endTime: String(now), limit: '1000' }).catch(() => []);
+    const optByOrder = new Map<number, BinanceOptionTrade[]>();
+    for (const f of opt) {
+      if (num(f.realizedProfit) === 0) continue;
+      optByOrder.set(f.orderId, [...(optByOrder.get(f.orderId) ?? []), f]);
+    }
+    for (const [orderId, g] of optByOrder) {
+      const qty = g.reduce((s, f) => s + num(f.quantity), 0);
+      if (!(qty > 0)) continue;
+      const exit = g.reduce((s, f) => s + num(f.price) * num(f.quantity), 0) / qty;
+      const gross = g.reduce((s, f) => s + num(f.realizedProfit), 0);
+      // Option fees are reported negative (a cost)
+      const fees = g.reduce((s, f) => s + num(f.fee), 0);
+      const side: 'long' | 'short' = g[0].side === 'SELL' ? 'long' : 'short';
+      const dir = side === 'long' ? 1 : -1;
+      out.push(this.trade({
+        id: `binance:opt:${g[0].symbol}:${orderId}`,
+        symbol: g[0].symbol, side,
+        entryPrice: exit - gross / (qty * dir),
+        exitPrice: exit,
+        quantity: qty,
+        pnl: gross + fees,
+        fees,
+        entryTime: null,
+        exitTime: Math.max(...g.map((f) => f.time)),
+        category: 'option',
+      }));
+    }
+    return out;
+  }
+
+  /** symbol → underlyingType / underlyingSubType (EQUITY, COMMODITY, FX, INDEX, COIN, …) */
+  private futuresMeta(): Promise<Map<string, { underlyingType: string; sub: string[] }>> {
+    return cachedPublic('binance:fapi:exchangeInfo', 6 * 3_600_000, async () => {
+      const res = await fetch(`${FUTURES_BASE}/fapi/v1/exchangeInfo`);
+      if (!res.ok) throw new Error(`Binance exchangeInfo ${res.status}`);
+      const body = (await res.json()) as { symbols: Array<{ symbol: string; underlyingType?: string; underlyingSubType?: string[] }> };
+      return new Map(body.symbols.map((s) => [s.symbol, { underlyingType: s.underlyingType ?? '', sub: s.underlyingSubType ?? [] }]));
+    });
   }
 
   private async publicGet<T>(path: string, params: Record<string, string> = {}): Promise<T> {
@@ -278,4 +392,24 @@ async function binanceFundingQuotes(): Promise<Map<string, FundingQuote>> {
   ]);
   const interval = new Map(info.map((i) => [i.symbol, i.fundingIntervalHours]));
   return new Map(idx.map((i) => [i.symbol, { rate: num(i.lastFundingRate), nextTime: num(i.nextFundingTime) || null, intervalH: interval.get(i.symbol) ?? 8 }]));
+}
+
+interface BinanceIncome { symbol: string; incomeType: string; income: string; time: number; tradeId?: string }
+interface BinanceUserTrade {
+  symbol: string; orderId: number; side: 'BUY' | 'SELL'; positionSide: 'BOTH' | 'LONG' | 'SHORT';
+  price: string; qty: string; realizedPnl: string; commission: string; commissionAsset: string; time: number;
+}
+interface BinanceOptionTrade {
+  symbol: string; orderId: number; side: 'BUY' | 'SELL'; price: string; quantity: string; fee: string; realizedProfit: string; time: number;
+}
+
+function binanceCategory(symbol: string, m: { underlyingType: string; sub: string[] } | undefined): TradeCategory {
+  // Gold, including gold-backed tokens (PAXG / XAUT are listed as coins)
+  if (!m || guessCategory(symbol) === 'xau') return guessCategory(symbol);
+  const t = m.underlyingType;
+  if (t === 'COMMODITY' || t === 'FX') return 'xau';
+  if (t.endsWith('EQUITY') || m.sub.includes('Pre-IPO')) return 'stock';
+  // INDEX covers crypto indices (BTCDOM, DEFI) as well as TradFi ones
+  if (t === 'INDEX') return m.sub.includes('TradFi') ? 'stock' : 'crypto';
+  return 'crypto';
 }

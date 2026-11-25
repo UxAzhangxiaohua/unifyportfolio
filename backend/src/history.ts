@@ -1,6 +1,7 @@
-import type { AccountSnapshot } from './types.js';
+import type { AccountSnapshot, HistoryBackfill } from './types.js';
 import { historyDbInsert, historyDbLoad, historyDbOpen } from './db.js';
 import { transitAdjuster } from './transfers.js';
+import { estimatorFor, type Estimator } from './backfill.js';
 
 interface EquityPoint {
   t: number; // unix seconds
@@ -8,7 +9,12 @@ interface EquityPoint {
   accounts: Record<string, number>;
   /** Per-account USD outside the trading wallets (earn + funding stables). Absent on old points */
   off?: Record<string, number>;
+  /** Synthetic point before the first recorded sample (backfill.ts estimate) */
+  est?: boolean;
 }
+
+/** Spacing of the synthetic points before the first recorded sample */
+const BACKFILL_STEP_S = 3600;
 
 /** 'total' = all equity; 'trading' = equity minus earn and funding wallets (CFD/MT5 count as trading) */
 export type HistoryScope = 'total' | 'trading';
@@ -29,11 +35,115 @@ export async function historyInit(): Promise<void> {
   console.log(`[history] loaded ${longPoints.length} persisted point(s)`);
 }
 
-/** Persisted history up to the start of this session, then the fine-grained session samples (raw totals) */
-function rawSeries(): EquityPoint[] {
+let backfills: Array<{ accountId: string; before: number; amount: number }> = [];
+
+/** Manual backfills from accounts.json `historyBackfill` (see HistoryBackfill) */
+/** Unix seconds of an account's first recorded sample, null if it has none */
+export function historyFirstSeen(accountId: string): number | null {
+  for (const p of storedSeries()) if (p.accounts[accountId] != null) return p.t;
+  return null;
+}
+
+export function historySetBackfill(list: HistoryBackfill[] | undefined): void {
+  backfills = [];
+  for (const b of list ?? []) {
+    const before = typeof b.before === 'number' ? b.before : Math.floor(Date.parse(b.before) / 1000);
+    if (!b.accountId || !Number.isFinite(before) || !Number.isFinite(b.amount) || b.amount === 0) {
+      console.warn(`[history] ignoring invalid historyBackfill entry ${JSON.stringify(b)}`);
+      continue;
+    }
+    backfills.push({ accountId: b.accountId, before, amount: b.amount });
+  }
+  if (backfills.length) console.log(`[history] ${backfills.length} manual backfill(s) applied to the curve`);
+}
+
+/** Persisted history up to the start of this session, then the fine-grained session samples (as recorded) */
+function storedSeries(): EquityPoint[] {
   const sessionStart = points[0]?.t ?? Infinity;
   const older = longPoints.filter((p) => p.t < sessionStart);
   return older.length ? [...older, ...points] : points;
+}
+
+/**
+ * Recorded series with funds that existed before they were tracked added back, so connecting an
+ * account (or a wallet type) later doesn't look like a gain:
+ * - automatic: before an account's first sample, its estimated equity (backfill.ts: venue history or
+ *   walked back from trades + deposits/withdrawals; else its first recorded equity) is added to
+ *   the total; per-account values stay absent on recorded points;
+ * - manual (`historyBackfill`): the amount is added to the account and the total before `before`;
+ * - before the first recorded sample: hourly synthetic points (`est`) from the estimates, once
+ *   every account has one there.
+ * Stored data is never modified.
+ */
+function rawSeries(): EquityPoint[] {
+  const list = storedSeries();
+  if (!list.length) return list;
+  const first = new Map<string, { t: number; v: number; off: number }>();
+  for (const p of list) {
+    for (const [id, v] of Object.entries(p.accounts)) {
+      if (!first.has(id)) first.set(id, { t: p.t, v, off: p.off?.[id] ?? 0 });
+    }
+  }
+  // Estimated equity before each account's first sample (venue history or walked back from it)
+  const est = new Map<string, Estimator>();
+  for (const [id, f] of first) {
+    const e = estimatorFor(id, f.t * 1000, f.v);
+    if (e) est.set(id, e);
+  }
+
+  /** Manual backfill for a value at t. `auto`: the value is derived from the first sample */
+  const manual = (id: string, t: number, auto: boolean) => {
+    let add = 0;
+    for (const b of backfills) {
+      if (b.accountId !== id || t >= b.before) continue;
+      // A first sample taken after `before` already includes these funds
+      if (auto && (first.get(id)?.t ?? Infinity) >= b.before) continue;
+      add += b.amount;
+    }
+    return add;
+  };
+  /** Value of an account at t before its first sample */
+  const before = (id: string, t: number) => {
+    const e = est.get(id);
+    const f = first.get(id)!;
+    const v = e && t * 1000 >= e.from ? e.at(t * 1000) : f.v;
+    return Math.max(0, v + manual(id, t, true));
+  };
+
+  const recorded = list.map((p) => {
+    let total = p.total;
+    let accounts = p.accounts;
+    let off = p.off;
+    for (const [id, f] of first) {
+      if (p.t >= f.t || p.accounts[id] != null) continue;
+      total += before(id, p.t);
+      if (off && f.off) off = { ...off, [id]: f.off };
+    }
+    for (const b of backfills) {
+      if (p.t >= b.before || accounts[b.accountId] == null) continue;
+      total += b.amount;
+      accounts = { ...accounts, [b.accountId]: accounts[b.accountId] + b.amount };
+    }
+    return total === p.total && accounts === p.accounts && off === p.off ? p : { ...p, total, accounts, off };
+  });
+
+  // Synthetic points before the first sample, once every account has an estimate there
+  if (!first.size || est.size < first.size) return recorded;
+  const start = Math.max(...[...est.values()].map((e) => Math.ceil(e.from / 1000)));
+  const end = list[0].t;
+  const synth: EquityPoint[] = [];
+  for (let t = Math.ceil(start / BACKFILL_STEP_S) * BACKFILL_STEP_S; t < end; t += BACKFILL_STEP_S) {
+    const accounts: Record<string, number> = {};
+    let total = 0;
+    for (const id of first.keys()) total += accounts[id] = before(id, t);
+    synth.push({ t, total, accounts, est: true });
+  }
+  return synth.length ? [...synth, ...recorded] : recorded;
+}
+
+/** Unix seconds of the first recorded sample (points before it are estimates) */
+function firstRecordedT(): number | null {
+  return storedSeries()[0]?.t ?? null;
 }
 
 /**
@@ -115,6 +225,10 @@ export interface HistoryResponse {
   pnl: number;
   pnlPercent: number;
   period: string;
+  /** Trading scope: points before this unix time use an estimated earn/funding breakdown */
+  estimatedBefore?: number;
+  /** Total scope: points before this unix time are reconstructed estimates (no sample recorded yet) */
+  backfilledBefore?: number;
 }
 
 export function historyGet(period: string, accountId?: string, scope: HistoryScope = 'total'): HistoryResponse {
@@ -125,14 +239,28 @@ export function historyGet(period: string, accountId?: string, scope: HistorySco
 
   // Skip samples taken before a given account had data, instead of plotting them as 0
   // Trading scope uses raw totals (no transit lift: the funds left a funding wallet, which this
-  // scope excludes anyway) and only points recorded with the earn/funding breakdown
+  // scope excludes anyway). Points recorded before the earn/funding breakdown existed get the
+  // earliest recorded breakdown (estimate), so the curve isn't cut off at that point
   const trading = scope === 'trading';
-  const filtered = (trading ? rawSeries().filter((p) => p.off) : series())
-    .filter((p) => p.t >= cutoff && (!accountId || p.accounts[accountId] != null));
+  let estimatedBefore: number | undefined;
+  let base: EquityPoint[];
+  if (trading) {
+    // Synthetic pre-history estimates have no earn/funding split: total scope only
+    const raw = rawSeries().filter((p) => !p.est);
+    const firstOff = raw.find((p) => p.off);
+    if (!firstOff) base = [];
+    else {
+      if (raw[0] !== firstOff) estimatedBefore = firstOff.t;
+      base = raw.map((p) => (p.off ? p : { ...p, off: firstOff.off }));
+    }
+  } else base = series();
+  const filtered = base.filter((p) => p.t >= cutoff && (!accountId || p.accounts[accountId] != null));
 
   if (filtered.length === 0) {
     return { points: [], pnl: 0, pnlPercent: 0, period };
   }
+  if (estimatedBefore != null && filtered[0].t >= estimatedBefore) estimatedBefore = undefined;
+  const backfilledBefore = filtered[0].est ? firstRecordedT() ?? undefined : undefined;
 
   const sumOff = (p: EquityPoint) => Object.values(p.off ?? {}).reduce((s, v) => s + v, 0);
   const getValue = accountId
@@ -154,6 +282,8 @@ export function historyGet(period: string, accountId?: string, scope: HistorySco
     pnl,
     pnlPercent,
     period,
+    ...(estimatedBefore != null ? { estimatedBefore } : {}),
+    ...(backfilledBefore != null ? { backfilledBefore } : {}),
   };
 }
 

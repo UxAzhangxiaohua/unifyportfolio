@@ -7,3 +7,4 @@ accounts.json
 logs/
 data/
 mt5bridge/bin/
+*.tsbuildinfo
