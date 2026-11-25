@@ -227,8 +227,6 @@ export interface HistoryResponse {
   pnl: number;
   pnlPercent: number;
   period: string;
-  /** Trading scope: points before this unix time use an estimated earn/funding breakdown */
-  estimatedBefore?: number;
   /** Total scope: points before this unix time are reconstructed estimates (no sample recorded yet) */
   backfilledBefore?: number;
 }
@@ -241,27 +239,22 @@ export function historyGet(period: string, accountId?: string, scope: HistorySco
 
   // Skip samples taken before a given account had data, instead of plotting them as 0
   // Trading scope uses raw totals (no transit lift: the funds left a funding wallet, which this
-  // scope excludes anyway). Points recorded before the earn/funding breakdown existed get the
-  // earliest recorded breakdown (estimate), so the curve isn't cut off at that point
+  // scope excludes anyway). It starts at the first point that recorded the earn/funding
+  // breakdown: applying a later breakdown to earlier points subtracted earn balances an account
+  // didn't hold yet (negative trading equity) and turned transfers into earn into fake gains
   const trading = scope === 'trading';
-  let estimatedBefore: number | undefined;
   let base: EquityPoint[];
   if (trading) {
     // Synthetic pre-history estimates have no earn/funding split: total scope only
     const raw = rawSeries().filter((p) => !p.est);
-    const firstOff = raw.find((p) => p.off);
-    if (!firstOff) base = [];
-    else {
-      if (raw[0] !== firstOff) estimatedBefore = firstOff.t;
-      base = raw.map((p) => (p.off ? p : { ...p, off: firstOff.off }));
-    }
+    const i = raw.findIndex((p) => p.off);
+    base = i < 0 ? [] : raw.slice(i);
   } else base = series();
   const filtered = base.filter((p) => p.t >= cutoff && (!accountId || p.accounts[accountId] != null));
 
   if (filtered.length === 0) {
     return { points: [], pnl: 0, pnlPercent: 0, period };
   }
-  if (estimatedBefore != null && filtered[0].t >= estimatedBefore) estimatedBefore = undefined;
   const backfilledBefore = filtered[0].est ? firstRecordedT() ?? undefined : undefined;
 
   const sumOff = (p: EquityPoint) => Object.values(p.off ?? {}).reduce((s, v) => s + v, 0);
@@ -284,7 +277,6 @@ export function historyGet(period: string, accountId?: string, scope: HistorySco
     pnl,
     pnlPercent,
     period,
-    ...(estimatedBefore != null ? { estimatedBefore } : {}),
     ...(backfilledBefore != null ? { backfilledBefore } : {}),
   };
 }
