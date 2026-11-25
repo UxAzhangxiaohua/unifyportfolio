@@ -77,5 +77,14 @@
         "server": "YOUR_BROKER_SERVER"
       }
     }
-  ]
+  ],
+  "payoutAddresses": [
+    "0xYOUR_CASHOUT_ADDRESS"
+  ],
+  "transferSources": {
+    "0xYOUR_MT5_PAYOUT_SENDER_ADDRESS": "mt5-main"
+  },
+  "mcp": {
+    "token": "YOUR_RANDOM_TOKEN_AT_LEAST_16_CHARS"
+  }
 }
