@@ -331,7 +331,6 @@ function buildServer(): McpServer {
       period, scope, account: account ?? 'all',
       change: r2(h.pnl), changePct: r2(h.pnlPercent),
       ...(h.backfilledBefore ? { reconstructedBefore: new Date(h.backfilledBefore * 1000).toISOString() } : {}),
-      ...(h.estimatedBefore ? { tradingSplitEstimatedBefore: new Date(h.estimatedBefore * 1000).toISOString() } : {}),
       points: pts.map((p) => ({ t: new Date(p.t * 1000).toISOString(), equity: r2(p.v) })),
     });
   });

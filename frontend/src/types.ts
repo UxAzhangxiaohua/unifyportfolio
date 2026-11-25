@@ -179,8 +179,6 @@ export interface HistoryResponse {
   pnl: number;
   pnlPercent: number;
   period: string;
-  /** Trading scope: points before this unix time use an estimated earn/funding breakdown */
-  estimatedBefore?: number;
   /** Total scope: points before this unix time are reconstructed (before the first recorded sample) */
   backfilledBefore?: number;
 }

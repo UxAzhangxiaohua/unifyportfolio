@@ -253,15 +253,6 @@ export function EquityChart({ fixedScope, defaultPeriod = '24h' }: { fixedScope?
         )}
       </div>
 
-      {stats && scope === 'trading' && history?.estimatedBefore != null && (
-        <div className="px-5 pb-1 -mt-1 text-[11px] text-text-muted">
-          {tr(
-            `${fmtFull(history.estimatedBefore)} 之前的交易账户值为估算（理财 + 资金账户余额按最早记录值扣除）`,
-            `Trading equity before ${fmtFull(history.estimatedBefore)} is estimated (earn + funding taken at their earliest recorded value)`,
-          )}
-        </div>
-      )}
-
       {stats && scope === 'total' && history?.backfilledBefore != null && (
         <div className="px-5 pb-1 -mt-1 text-[11px] text-text-muted">
           <span className="inline-block w-3 h-[2px] align-middle mr-1.5" style={{ background: EST_LINE }} />
