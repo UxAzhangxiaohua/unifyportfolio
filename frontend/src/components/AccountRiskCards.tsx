@@ -3,7 +3,7 @@ import type { AccountSnapshot } from '../types';
 import { EXCHANGES } from '../lib/exchanges';
 import { fmtCompact, fmtSigned, fmtUSD, pnlClass } from '../lib/format';
 import { fmtLev } from '../lib/exposure';
-import { riskAccounts, type AccountRisk } from '../lib/risk';
+import { riskAccounts, type AccountRisk, type RiskGroup } from '../lib/risk';
 import { tr } from '../lib/i18n';
 import { CardHeader, EmptyState } from './ui';
 
@@ -19,13 +19,51 @@ function M({ label, value, foot, hint }: { label: string; value: ReactNode; foot
 
 const liqClass = (d: number) => (d < 10 ? 'text-loss' : d < 25 ? 'text-delayed' : 'text-text-primary');
 
+function GroupBlock({ r, g, kind, titled }: { r: AccountRisk; g: RiskGroup; kind: 'perp' | 'cfd'; titled: boolean }) {
+  const mPct = g.equity > 0 ? g.margin / g.equity : null;
+  return (
+    <div className={`flex flex-col gap-3 ${titled && kind === 'cfd' ? 'pt-3 border-t border-border-card' : ''}`}>
+      {titled && <div className="text-[11px] font-medium text-text-secondary">{kind === 'perp' ? tr('加密合约', 'Crypto perps') : tr('CFD 子账户', 'CFD sub-account')}</div>}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
+        <M label={kind === 'perp' ? tr('交易权益', 'Trading equity') : tr('CFD 权益', 'CFD equity')} value={fmtUSD(g.equity, { decimals: false })}
+          hint={kind === 'perp' ? tr('总权益 − 理财 − 资金账户 − CFD 子账户', 'Total − earn − funding − CFD sub-accounts') : undefined}
+          foot={kind === 'perp' && Math.abs(r.a.equity - g.equity) >= 1 ? <>{tr('总', 'Total')} <span className="num">{fmtCompact(r.a.equity)}</span></> : undefined} />
+        <M label={tr('保证金', 'Margin')} value={<>{g.marginEstimated && '≈'}{fmtUSD(g.margin, { decimals: false })}</>}
+          hint={g.marginEstimated ? tr('交易所未提供，按 名义 ÷ 杠杆 估算', 'Not reported by the venue — estimated as notional ÷ leverage') : undefined}
+          foot={mPct != null ? <span className={mPct >= 0.8 ? 'text-loss' : mPct >= 0.5 ? 'text-delayed' : ''}>{(mPct * 100).toFixed(1)}% {tr('权益', 'of eq.')}</span> : undefined} />
+        <M label={tr('实际杠杆', 'Actual lev.')} value={g.lev != null ? fmtLev(g.lev) : '—'}
+          hint={kind === 'perp' ? tr('合约总敞口 ÷ 交易权益', 'Perp gross exposure ÷ trading equity') : tr('CFD 名义价值 ÷ CFD 权益', 'CFD notional ÷ CFD equity')}
+          foot={<>{tr('总敞口', 'Gross')} <span className="num">{fmtCompact(g.x.gross)}</span></>} />
+        <M label={tr('多 / 空', 'Long / short')}
+          value={<><span className="text-profit">{fmtCompact(g.x.long)}</span><span className="text-text-muted text-[12px]"> / </span><span className="text-loss">{fmtCompact(g.x.short)}</span></>} />
+        <M label={tr('净敞口', 'Net')} value={<span className={pnlClass(g.x.net)}>{fmtSigned(g.x.net, { decimals: false })}</span>}
+          foot={g.equity > 0 ? <>{tr('净杠杆', 'Net lev.')} <span className="num">{fmtLev(Math.abs(g.x.net) / g.equity)}</span></> : undefined} />
+        {kind === 'cfd' ? (
+          <M label={tr('保证金率', 'Margin level')} value={r.marginLevel != null ? `${r.marginLevel >= 10000 ? r.marginLevel.toFixed(0) : r.marginLevel.toFixed(1)}%` : '—'}
+            hint={tr('权益 ÷ 已用保证金', 'Equity ÷ used margin')} foot={titled ? <>{tr('浮盈亏', 'uPnL')} <span className={`num ${pnlClass(g.upl)}`}>{fmtSigned(g.upl)}</span></> : undefined} />
+        ) : r.liq != null ? (
+          <M label={tr('最近强平', 'Nearest liq.')} value={<span className={liqClass(r.liq)}>{r.liq.toFixed(1)}%</span>}
+            hint={tr('标记价距强平价的最小距离', 'Smallest distance from mark to liquidation price')} foot={r.liqSymbol ?? undefined} />
+        ) : r.nextFunding != null ? (
+          <M label={tr('下一轮资金费', 'Next funding')} value={<span className={pnlClass(r.nextFunding)}>{fmtSigned(r.nextFunding)}</span>} />
+        ) : <M label={tr('最近强平', 'Nearest liq.')} value={<span className="text-text-muted">—</span>} />}
+      </div>
+      {mPct != null && (
+        <div className="h-1 rounded-full overflow-hidden bg-bg-inset" title={tr('保证金占权益', 'Margin ÷ equity')}>
+          <div className={`h-full rounded-full ${mPct >= 0.8 ? 'bg-loss' : mPct >= 0.5 ? 'bg-delayed' : 'bg-accent'}`} style={{ width: `${Math.min(mPct, 1) * 100}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One card per account holding derivatives: equity, margin, actual leverage, L/S/net, uPnL, nearest liquidation */
 export function AccountRiskCards({ accounts }: { accounts: AccountSnapshot[] }) {
   const risks = riskAccounts(accounts);
   return (
     <section className="card overflow-hidden">
       <CardHeader title={tr('各账户风险', 'Risk by account')}
-        sub={tr('仅列出有合约 / CFD / 期权持仓的账户；交易权益 = 总权益 − 理财 − 资金账户', 'Accounts with perps / CFD / options only; trading equity = total − earn − funding wallets')} />
+        sub={tr('仅列出有合约 / CFD / 期权持仓的账户；加密合约与 CFD（MT5）分开计算杠杆', 'Accounts with perps / CFD / options only; crypto perps and CFD (MT5) leverage computed separately')} />
       {risks.length === 0 ? <EmptyState>{tr('当前没有衍生品持仓', 'No derivative positions')}</EmptyState> : (
         <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3 px-5 pb-5">
           {risks.map((r) => <RiskCard key={r.a.accountId} r={r} />)}
@@ -38,7 +76,9 @@ export function AccountRiskCards({ accounts }: { accounts: AccountSnapshot[] }) 
 function RiskCard({ r }: { r: AccountRisk }) {
   const { a } = r;
   const ex = EXCHANGES[a.exchange];
-  const mPct = r.equity > 0 ? r.margin / r.equity : null;
+  // Crypto perps and CFD (MT5 / CFD sub-account) are separate leverage groups
+  const showCfd = r.cfd != null;
+  const showPerp = r.perps.length > 0 || r.options.length > 0 || !showCfd;
   const counts = [
     r.perps.length ? tr(`合约 ${r.perps.length}`, `${r.perps.length} perps`) : null,
     r.cfds.length ? `CFD ${r.cfds.length}` : null,
@@ -62,35 +102,8 @@ function RiskCard({ r }: { r: AccountRisk }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
-        <M label={tr('交易权益', 'Trading equity')} value={fmtUSD(r.equity, { decimals: false })}
-          foot={Math.abs(a.equity - r.equity) >= 1 ? <>{tr('总', 'Total')} <span className="num">{fmtCompact(a.equity)}</span></> : undefined} />
-        <M label={tr('保证金', 'Margin')} value={<>{r.marginEstimated && '≈'}{fmtUSD(r.margin, { decimals: false })}</>}
-          hint={r.marginEstimated ? tr('交易所未提供，按 名义 ÷ 杠杆 估算', 'Not reported by the venue — estimated as notional ÷ leverage') : undefined}
-          foot={mPct != null ? <span className={mPct >= 0.8 ? 'text-loss' : mPct >= 0.5 ? 'text-delayed' : ''}>{(mPct * 100).toFixed(1)}% {tr('权益', 'of eq.')}</span> : undefined} />
-        <M label={tr('实际杠杆', 'Actual lev.')} value={r.lev != null ? fmtLev(r.lev) : '—'}
-          hint={tr('合约 + CFD 总敞口 ÷ 交易权益', 'Perp + CFD gross exposure ÷ trading equity')}
-          foot={<>{tr('总敞口', 'Gross')} <span className="num">{fmtCompact(r.x.gross)}</span></>} />
-        <M label={tr('多 / 空', 'Long / short')}
-          value={<><span className="text-profit">{fmtCompact(r.x.long)}</span><span className="text-text-muted text-[12px]"> / </span><span className="text-loss">{fmtCompact(r.x.short)}</span></>} />
-        <M label={tr('净敞口', 'Net')} value={<span className={pnlClass(r.x.net)}>{fmtSigned(r.x.net, { decimals: false })}</span>}
-          foot={r.equity > 0 ? <>{tr('净杠杆', 'Net lev.')} <span className="num">{fmtLev(Math.abs(r.x.net) / r.equity)}</span></> : undefined} />
-        {r.liq != null ? (
-          <M label={tr('最近强平', 'Nearest liq.')} value={<span className={liqClass(r.liq)}>{r.liq.toFixed(1)}%</span>}
-            hint={tr('标记价距强平价的最小距离', 'Smallest distance from mark to liquidation price')} foot={r.liqSymbol ?? undefined} />
-        ) : r.marginLevel != null ? (
-          <M label={tr('保证金率', 'Margin level')} value={`${r.marginLevel >= 10000 ? r.marginLevel.toFixed(0) : r.marginLevel.toFixed(1)}%`}
-            hint={tr('权益 ÷ 已用保证金', 'Equity ÷ used margin')} />
-        ) : r.nextFunding != null ? (
-          <M label={tr('下一轮资金费', 'Next funding')} value={<span className={pnlClass(r.nextFunding)}>{fmtSigned(r.nextFunding)}</span>} />
-        ) : <M label={tr('最近强平', 'Nearest liq.')} value={<span className="text-text-muted">—</span>} />}
-      </div>
-
-      {mPct != null && (
-        <div className="h-1 rounded-full overflow-hidden bg-bg-inset" title={tr('保证金占交易权益', 'Margin ÷ trading equity')}>
-          <div className={`h-full rounded-full ${mPct >= 0.8 ? 'bg-loss' : mPct >= 0.5 ? 'bg-delayed' : 'bg-accent'}`} style={{ width: `${Math.min(mPct, 1) * 100}%` }} />
-        </div>
-      )}
+      {showPerp && <GroupBlock r={r} g={r.perp} kind="perp" titled={!!showCfd} />}
+      {showCfd && r.cfd && <GroupBlock r={r} g={r.cfd} kind="cfd" titled={showPerp} />}
     </div>
   );
 }

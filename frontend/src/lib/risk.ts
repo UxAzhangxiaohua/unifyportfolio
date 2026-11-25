@@ -1,5 +1,5 @@
 import type { AccountSnapshot, Position } from '../types';
-import { baseSymbol, exposureOf, isPerpLike, sumExposure, type ExposureTotals } from './exposure';
+import { baseSymbol, exposureOf, isPerpLike, sumExposure, tradingEquity, type ExposureTotals } from './exposure';
 
 // Portfolio-level risk across perps / futures, CFDs and options (positions page).
 
@@ -27,26 +27,36 @@ export const dollarDelta = (p: Position) => {
   return o?.delta != null && o.underlyingPrice ? o.delta * o.underlyingPrice : null;
 };
 
+/**
+ * One leverage group of an account. Crypto perps / futures and CFD (MT5, Bitget CFD sub-account)
+ * are kept apart: different equity base, margin rules and exposure, so mixing them hides both.
+ */
+export interface RiskGroup {
+  x: ExposureTotals;
+  /** perp: trading equity excl. earn / funding / CFD sub-accounts; cfd: Σ CFD account equity */
+  equity: number;
+  margin: number;
+  marginEstimated: boolean;
+  /** gross exposure ÷ equity */
+  lev: number | null;
+  upl: number;
+}
+
 export interface AccountRisk {
   a: AccountSnapshot;
   perps: Position[];
   cfds: Position[];
   options: Position[];
-  /** Perps + CFD (directional, leveraged ETFs × factor) */
-  x: ExposureTotals;
-  perpX: ExposureTotals;
-  cfdX: ExposureTotals;
+  perp: RiskGroup;
+  /** null when the account has no CFD account / positions */
+  cfd: RiskGroup | null;
+  /** All derivatives incl. options */
   upl: number;
-  margin: number;
-  marginEstimated: boolean;
-  equity: number;
-  /** gross exposure ÷ risk equity */
-  lev: number | null;
   /** Nearest liquidation distance (%) over perps */
   liq: number | null;
   liqSymbol: string | null;
   nextFunding: number | null;
-  /** MT5 / CFD sub-account margin level (lowest), % */
+  /** CFD account margin level (lowest), % */
   marginLevel: number | null;
 }
 
@@ -56,17 +66,29 @@ export function accountRisk(a: AccountSnapshot): AccountRisk {
   const options = a.positions.filter((p) => p.assetClass === 'option');
   const perpX = sumExposure(perps);
   const cfdX = sumExposure(cfds);
-  const x = sumExposure([...perps, ...cfds]);
   const cfdStates = (a.cfd ?? []).filter((c) => !c.equityOnly);
-  // CFD floating PnL: the account-level figure is authoritative (incl. swap / commission)
+  const optUpl = options.reduce((s, p) => s + p.unrealizedPnl, 0);
+
+  // CFD: the CFD account's own equity / margin; floating PnL from the account (incl. swap / commission)
+  const cfdMargin = cfdStates.reduce((s, c) => s + c.usedMargin, 0);
+  const cfdEquity = cfdStates.reduce((s, c) => s + c.equity, 0);
   const cfdUpl = cfdStates.length ? cfdStates.reduce((s, c) => s + c.floatingPnl, 0) : cfdX.upl;
-  const upl = perpX.upl + cfdUpl + options.reduce((s, p) => s + p.unrealizedPnl, 0);
-  // Account-level initial margin includes CFD sub-accounts (Bitget, MT5); else sum the parts
+  const cfd: RiskGroup | null = cfdStates.length || cfds.length ? {
+    x: cfdX, equity: cfdEquity, margin: cfdMargin,
+    marginEstimated: cfdStates.some((c) => c.marginEstimated),
+    lev: cfdEquity > 0 ? cfdX.gross / cfdEquity : null, upl: cfdUpl,
+  } : null;
+
+  // Perps: account-level initial margin includes the CFD sub-account (Bitget, MT5) — take it out
   const venue = a.marginUsed != null && a.marginUsed > 0 ? a.marginUsed : null;
-  const margin = venue ?? perpX.margin + cfdStates.reduce((s, c) => s + c.usedMargin, 0);
-  const cfdEst = cfdStates.some((c) => c.marginEstimated);
-  const marginEstimated = venue == null ? perps.some((p) => exposureOf(p).marginEstimated) || cfdEst : cfdEst && a.exchange === 'mt5';
-  const equity = riskEquity(a);
+  const perpMargin = venue != null ? Math.max(venue - cfdMargin, 0) : perpX.margin;
+  const perpEquity = tradingEquity(a);
+  const perp: RiskGroup = {
+    x: perpX, equity: perpEquity, margin: perpMargin,
+    marginEstimated: venue == null && perps.some((p) => exposureOf(p).marginEstimated),
+    lev: perpEquity > 0 ? perpX.gross / perpEquity : null, upl: perpX.upl + optUpl,
+  };
+
   let liq: number | null = null, liqSymbol: string | null = null;
   for (const p of perps) {
     const d = liqDistance(p);
@@ -75,18 +97,33 @@ export function accountRisk(a: AccountSnapshot): AccountRisk {
   const nf = perps.filter((p) => p.nextFunding != null);
   const levels = cfdStates.map((c) => c.marginLevel).filter((v): v is number => v != null);
   return {
-    a, perps, cfds, options, x, perpX, cfdX, upl, margin, marginEstimated, equity,
-    lev: equity > 0 ? x.gross / equity : null,
+    a, perps, cfds, options, perp, cfd,
+    upl: perp.upl + (cfd?.upl ?? 0),
     liq, liqSymbol,
     nextFunding: nf.length ? nf.reduce((s, p) => s + (p.nextFunding as number), 0) : null,
     marginLevel: levels.length ? Math.min(...levels) : null,
   };
 }
 
+/** Σ over accounts of one group (perp or cfd) */
+export function sumGroup(risks: AccountRisk[], k: 'perp' | 'cfd') {
+  const gs = risks.map((r) => r[k]).filter((g): g is RiskGroup => g != null && (g.x.gross > 0 || g.margin > 0));
+  const long = gs.reduce((s, g) => s + g.x.long, 0);
+  const short = gs.reduce((s, g) => s + g.x.short, 0);
+  const equity = gs.reduce((s, g) => s + g.equity, 0);
+  const margin = gs.reduce((s, g) => s + g.margin, 0);
+  return {
+    n: gs.length, long, short, gross: long + short, net: long - short, equity, margin,
+    marginEstimated: gs.some((g) => g.marginEstimated),
+    lev: equity > 0 ? (long + short) / equity : null,
+    upl: gs.reduce((s, g) => s + g.upl, 0),
+  };
+}
+
 /** Accounts holding any derivative position, biggest exposure first */
 export function riskAccounts(accounts: AccountSnapshot[]): AccountRisk[] {
   return accounts.filter((a) => a.positions.some(isDeriv)).map(accountRisk)
-    .sort((x, y) => y.x.gross - x.x.gross || Math.abs(y.upl) - Math.abs(x.upl));
+    .sort((x, y) => (y.perp.x.gross + (y.cfd?.x.gross ?? 0)) - (x.perp.x.gross + (x.cfd?.x.gross ?? 0)) || Math.abs(y.upl) - Math.abs(x.upl));
 }
 
 // ── Exposure by underlying ────────────────────────────────────────────────────

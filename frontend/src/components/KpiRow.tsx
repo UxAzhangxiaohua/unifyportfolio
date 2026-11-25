@@ -3,8 +3,8 @@ import type { AccountSnapshot, PortfolioResponse } from '../types';
 import { fmtCompact, fmtSigned, fmtUSD, pnlClass } from '../lib/format';
 import { EXCHANGES } from '../lib/exchanges';
 import { tr } from '../lib/i18n';
-import { fmtLev, isPerpLike, sumExposure } from '../lib/exposure';
-import { dollarDelta, riskAccounts, riskEquity } from '../lib/risk';
+import { fmtLev, isPerpLike } from '../lib/exposure';
+import { dollarDelta, riskAccounts, riskEquity, sumGroup } from '../lib/risk';
 
 export function Tile({ label, value, foot, children, hint }: { label: string; value: ReactNode; foot?: ReactNode; children?: ReactNode; hint?: string }) {
   return (
@@ -39,66 +39,85 @@ function RatioBar({ ratio, warn = 0.5, danger = 0.8 }: { ratio: number; warn?: n
   );
 }
 
-const levHint = () => tr('实际杠杆 = 合约 + CFD 总敞口 ÷ 交易权益（总权益减去理财和资金账户；杠杆 ETF 已乘以倍数）', 'Actual leverage = perp + CFD gross exposure ÷ trading equity (total minus earn and funding wallets; leveraged ETFs × factor)');
-
 // ── Positions page ────────────────────────────────────────────────────────────
+
+type Group = ReturnType<typeof sumGroup>;
+
+function KV({ k, v }: { k: ReactNode; v: ReactNode }) {
+  return <div className="flex items-baseline justify-between gap-2 min-w-0"><span className="text-text-muted truncate">{k}</span><span className="num text-text-primary truncate">{v}</span></div>;
+}
+
+/** Actual leverage of one group (crypto perps or CFD) with its exposure, margin and equity base */
+function LevTile({ label, hint, g, eqLabel, extra }: { label: string; hint: string; g: Group; eqLabel: string; extra?: ReactNode }) {
+  const mPct = g.equity > 0 ? g.margin / g.equity : null;
+  return (
+    <Tile label={label} hint={hint}
+      value={<>{g.lev != null ? fmtLev(g.lev) : '—'}
+        {g.equity > 0 && <span className="ml-2 text-[12px] font-normal text-text-muted">{tr('净', 'net')} {fmtLev(Math.abs(g.net) / g.equity)}</span>}</>}>
+      <SplitBar parts={[{ v: g.long, c: 'var(--color-profit)' }, { v: g.short, c: 'var(--color-loss)' }]} />
+      <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-[12px]">
+        <KV k={tr('敞口', 'Gross')} v={fmtCompact(g.gross)} />
+        <KV k={tr('净', 'Net')} v={<span className={pnlClass(g.net)}>{fmtSigned(g.net, { decimals: false })}</span>} />
+        <KV k={<><span className="text-profit">{tr('多', 'L')}</span> / <span className="text-loss">{tr('空', 'S')}</span></>} v={<><span className="text-profit">{fmtCompact(g.long)}</span> / <span className="text-loss">{fmtCompact(g.short)}</span></>} />
+        <KV k={eqLabel} v={fmtCompact(g.equity)} />
+        <KV k={tr('保证金', 'Margin')} v={<>{g.marginEstimated && '≈'}{fmtCompact(g.margin)}</>} />
+        <KV k={tr('占权益', 'Of equity')} v={mPct != null ? <span className={mPct >= 0.8 ? 'text-loss' : mPct >= 0.5 ? 'text-delayed' : ''}>{(mPct * 100).toFixed(1)}%</span> : '—'} />
+        {extra}
+      </div>
+      {mPct != null && <RatioBar ratio={mPct} />}
+    </Tile>
+  );
+}
 
 export function RiskKpis({ accounts }: { accounts: AccountSnapshot[] }) {
   const risks = riskAccounts(accounts);
+  const perpG = sumGroup(risks, 'perp');
+  const cfdG = sumGroup(risks, 'cfd');
   const all = accounts.flatMap((a) => a.positions);
   const perps = all.filter(isPerpLike);
-  const cfds = all.filter((p) => p.assetClass === 'cfd');
   const opts = all.filter((p) => p.assetClass === 'option');
-  const x = sumExposure([...perps, ...cfds]);
-  const perpX = sumExposure(perps);
-  const equity = risks.reduce((s, r) => s + r.equity, 0);
-  const margin = risks.reduce((s, r) => s + r.margin, 0);
   const upl = risks.reduce((s, r) => s + r.upl, 0);
-  const perpUpl = perpX.upl;
   const optUpl = opts.reduce((s, p) => s + p.unrealizedPnl, 0);
-  const cfdUpl = upl - perpUpl - optUpl;
+  const perpUpl = perpG.upl - optUpl;
   const ds = opts.map(dollarDelta).filter((d): d is number => d != null);
   const optDelta = ds.length ? ds.reduce((s, d) => s + d, 0) : null;
   const paid = perps.filter((p) => p.fundingPnl != null);
   const next = perps.filter((p) => p.nextFunding != null);
+  const nextSum = next.reduce((s, p) => s + (p.nextFunding as number), 0);
+  const paidSum = paid.reduce((s, p) => s + (p.fundingPnl as number), 0);
   const nextTime = next.reduce<number | null>((t, p) => (p.nextFundingTime && (t == null || p.nextFundingTime < t) ? p.nextFundingTime : t), null);
   const mins = nextTime ? Math.max(0, Math.round((nextTime - Date.now()) / 60_000)) : null;
+  const cfdRisks = risks.filter((r) => r.cfd && (r.cfd.x.gross > 0 || r.cfd.margin > 0));
+  const mt5Only = cfdRisks.length > 0 && cfdRisks.every((r) => r.a.exchange === 'mt5');
+  const levels = cfdRisks.map((r) => r.marginLevel).filter((v): v is number => v != null);
+  const minLevel = levels.length ? Math.min(...levels) : null;
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 [&>*:first-child]:col-span-2 lg:[&>*:first-child]:col-span-1">
-      <Tile label={tr('总敞口（合约 + CFD）', 'Gross exposure (perps + CFD)')} value={fmtUSD(x.gross, { decimals: false })}
-        hint={tr('敞口 = 名义价值 × 杠杆 ETF 倍数；反向 ETF 的空单计为多头', 'Exposure = notional × leveraged-ETF factor; a short on an inverse ETF counts as long')}
-        foot={<span>{tr('净', 'Net')} <span className={`num ${pnlClass(x.net)}`}>{fmtSigned(x.net, { decimals: false })}</span>
-          {optDelta != null && <span className="text-text-muted"> · {tr('期权', 'Options')} $Δ <span className={`num ${pnlClass(optDelta)}`}>{fmtSigned(optDelta, { decimals: false })}</span></span>}</span>}>
-        <SplitBar parts={[{ v: x.long, c: 'var(--color-profit)' }, { v: x.short, c: 'var(--color-loss)' }]} />
-        <div className="flex gap-4 text-[12px]">
-          <span>{tr('多', 'Long')} <span className="num text-profit">{fmtCompact(x.long)}</span></span>
-          <span>{tr('空', 'Short')} <span className="num text-loss">{fmtCompact(x.short)}</span></span>
-        </div>
-      </Tile>
+    <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${cfdG.n ? 'xl:grid-cols-4' : 'xl:grid-cols-3'}`}>
+      <LevTile label={tr('加密合约 · 实际杠杆', 'Crypto perps · actual leverage')} g={perpG} eqLabel={tr('交易权益', 'Trading eq.')}
+        hint={tr('永续 / 交割合约敞口 ÷ 交易账户权益（总权益减去理财、资金账户和 CFD 子账户；杠杆 ETF 已乘以倍数）', 'Perp / futures exposure ÷ trading-account equity (total minus earn, funding and CFD sub-accounts; leveraged ETFs × factor)')} />
 
-      <Tile label={tr('实际杠杆', 'Actual leverage')} hint={levHint()} value={equity > 0 ? fmtLev(x.gross / equity) : '—'}
-        foot={<span>{tr('净杠杆', 'Net')} <span className="num">{equity > 0 ? fmtLev(Math.abs(x.net) / equity) : '—'}</span>
-          <span className="text-text-muted"> · {tr('交易权益', 'Trading eq.')} <span className="num">{fmtCompact(equity)}</span></span></span>} />
-
-      <Tile label={tr('保证金占用', 'Margin used')} value={fmtUSD(margin, { decimals: false })}
-        foot={equity > 0 ? <span><span className="num">{((margin / equity) * 100).toFixed(1)}%</span> {tr('交易权益', 'of trading equity')}
-          <span className="text-text-muted"> · {tr(`${risks.length} 个账户`, `${risks.length} accounts`)}</span></span> : undefined}>
-        {equity > 0 && <RatioBar ratio={margin / equity} />}
-      </Tile>
+      {cfdG.n > 0 && (
+        <LevTile label={mt5Only ? tr('MT5 · 实际杠杆', 'MT5 · actual leverage') : tr('CFD / MT5 · 实际杠杆', 'CFD / MT5 · actual leverage')} g={cfdG} eqLabel={tr('账户权益', 'Equity')}
+          hint={tr('CFD 持仓名义价值 ÷ CFD 账户权益（MT5、Bitget CFD 子账户），与加密合约分开计算', 'CFD notional ÷ CFD account equity (MT5, Bitget CFD sub-account), computed apart from crypto perps')}
+          extra={minLevel != null ? <KV k={tr('保证金率', 'Margin lvl')} v={`${minLevel >= 10000 ? minLevel.toFixed(0) : minLevel.toFixed(1)}%`} /> : undefined} />
+      )}
 
       <Tile label={tr('未实现盈亏', 'Unrealized PnL')} value={<span className={pnlClass(upl)}>{fmtSigned(upl, { decimals: false })}</span>}
-        foot={<span className="flex flex-wrap gap-x-3">
-          {perps.length > 0 && <span>{tr('合约', 'Perps')} <span className={`num ${pnlClass(perpUpl)}`}>{fmtCompact(perpUpl)}</span></span>}
-          {cfds.length > 0 && <span>CFD <span className={`num ${pnlClass(cfdUpl)}`}>{fmtCompact(cfdUpl)}</span></span>}
-          {opts.length > 0 && <span>{tr('期权', 'Options')} <span className={`num ${pnlClass(optUpl)}`}>{fmtCompact(optUpl)}</span></span>}
-        </span>} />
+        foot={<div className="flex flex-col gap-1 text-[12px]">
+          {perps.length > 0 && <KV k={tr('加密合约', 'Crypto perps')} v={<span className={pnlClass(perpUpl)}>{fmtSigned(perpUpl)}</span>} />}
+          {cfdG.n > 0 && <KV k={mt5Only ? 'MT5' : 'CFD'} v={<span className={pnlClass(cfdG.upl)}>{fmtSigned(cfdG.upl)}</span>} />}
+          {opts.length > 0 && <KV k={tr('期权', 'Options')} v={<span className={pnlClass(optUpl)}>{fmtSigned(optUpl)}</span>} />}
+          {optDelta != null && <KV k={tr('期权 $Delta', 'Options $Delta')} v={<span className={pnlClass(optDelta)}>{fmtSigned(optDelta, { decimals: false })}</span>} />}
+        </div>} />
 
       <Tile label={tr('资金费 · 下一轮预估', 'Funding · next round')}
         hint={tr('各仓位下一次结算的预估金额合计（按当前费率）；+ 收取 / − 支付', 'Sum of each position’s next estimated settlement at the current rate; + receive / − pay')}
-        value={next.length ? <span className={pnlClass(next.reduce((s, p) => s + (p.nextFunding as number), 0))}>{fmtSigned(next.reduce((s, p) => s + (p.nextFunding as number), 0))}</span> : '—'}
-        foot={<span>{tr('开仓以来', 'Since open')} {paid.length ? <span className={`num ${pnlClass(paid.reduce((s, p) => s + (p.fundingPnl as number), 0))}`}>{fmtSigned(paid.reduce((s, p) => s + (p.fundingPnl as number), 0))}</span> : '—'}
-          {mins != null && <span className="text-text-muted num"> · {mins >= 60 ? `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m` : `${mins}m`}</span>}</span>} />
+        value={next.length ? <span className={pnlClass(nextSum)}>{fmtSigned(nextSum)}</span> : '—'}
+        foot={<div className="flex flex-col gap-1 text-[12px]">
+          <KV k={tr('开仓以来', 'Since open')} v={paid.length ? <span className={pnlClass(paidSum)}>{fmtSigned(paidSum)}</span> : '—'} />
+          {mins != null && <KV k={tr('下次结算', 'Next settlement')} v={mins >= 60 ? `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m` : `${mins}m`} />}
+        </div>} />
     </div>
   );
 }
