@@ -32,6 +32,9 @@ const catLabel = (c: TradeCategory | undefined) => CATEGORIES.find((x) => x.key 
 const LIST_LIMIT = 200;
 /** Instruments shown per category before "show all" */
 const TREE_LIMIT = 8;
+/** "Hide small" toggle: instruments with |PnL| below this are left out of the breakdown */
+const SMALL_PNL = 100;
+const HIDE_SMALL_KEY = 'unify.tradesHideSmall';
 
 function formatDuration(seconds: number | null): string {
   if (seconds == null) return '—';
@@ -289,6 +292,9 @@ function CategoryTree({ trades, category, instrument, hasOptions, onCategory, on
   const [sort, setSort] = useState<{ k: SortKey; asc: boolean }>({ k: 'pnl', asc: false });
   const [collapsed, setCollapsed] = useState<Set<TradeCategory>>(new Set());
   const [expandedAll, setExpandedAll] = useState<Set<TradeCategory>>(new Set());
+  const [hideSmall, setHideSmall] = useState(() => { try { return localStorage.getItem(HIDE_SMALL_KEY) === '1'; } catch { return false; } });
+  const pickHideSmall = (v: boolean) => { setHideSmall(v); try { localStorage.setItem(HIDE_SMALL_KEY, v ? '1' : '0'); } catch { /* ignore */ } };
+  const isSmall = (r: Row) => Math.abs(r.s.pnl) < SMALL_PNL;
 
   const cmp = (a: Row, b: Row) => {
     const d = sort.asc ? 1 : -1;
@@ -340,7 +346,15 @@ function CategoryTree({ trades, category, instrument, hasOptions, onCategory, on
   return (
     <section className="card overflow-hidden">
       <CardHeader title={tr('分类 / 品种盈亏', 'PnL by category & instrument')}
-        sub={tr('点类别或品种筛选上方统计和下方明细；▸ 展开 / 收起', 'Click a category or instrument to filter the stats above and the list below; ▸ expand / collapse')} />
+        sub={tr('点类别或品种筛选上方统计和下方明细；▸ 展开 / 收起', 'Click a category or instrument to filter the stats above and the list below; ▸ expand / collapse')}
+        right={
+          <button type="button" onClick={() => pickHideSmall(!hideSmall)} aria-pressed={hideSmall}
+            title={tr(`隐藏盈亏绝对值小于 $${SMALL_PNL} 的品种（类别小计和合计不变）`, `Hide instruments whose |PnL| is under $${SMALL_PNL} (category subtotals and total unchanged)`)}
+            className={`chip !py-1 inline-flex items-center gap-1.5 transition-colors ${hideSmall ? '!border-accent/60 !text-text-primary bg-accent/[0.08]' : 'hover:border-border-hover'}`}>
+            <span className={`w-3 h-3 rounded-[3px] border grid place-items-center text-[9px] leading-none ${hideSmall ? 'bg-accent border-accent text-bg-primary' : 'border-border-hover'}`}>{hideSmall ? '✓' : ''}</span>
+            {tr(`隐藏 |盈亏| < $${SMALL_PNL}`, `Hide |PnL| < $${SMALL_PNL}`)}
+          </button>
+        } />
       <div className="overflow-x-auto border-t border-border-card">
         <table className="data">
           <thead>
@@ -374,7 +388,9 @@ function CategoryTree({ trades, category, instrument, hasOptions, onCategory, on
                     {cells(row, maxCat)}
                   </tr>
                   {open && (() => {
-                    const sorted = [...items].sort(cmp);
+                    // Small instruments drop out when "hide small" is on (a selected one stays visible)
+                    const small = hideSmall ? items.filter((r) => isSmall(r) && !(instrument === r.key && category === c.key)) : [];
+                    const sorted = items.filter((r) => !small.includes(r)).sort(cmp);
                     // keep a selected instrument visible even when it is outside the top rows
                     const full = expandedAll.has(c.key) || sorted.length <= TREE_LIMIT + 1;
                     // Folded rows are the least significant ones (smallest |PnL|, or fewest trades when
@@ -404,6 +420,14 @@ function CategoryTree({ trades, category, instrument, hasOptions, onCategory, on
                               ? <>▸ {tr(`其余 ${hidden} 个品种`, `${hidden} more instruments`)} <span className="num">{signedUsd(sorted.filter((r) => !head.includes(r)).reduce((s, r) => s + r.s.pnl, 0))}</span></>
                               : <>▾ {tr('收起', 'Show less')}</>}
                           </button>
+                        </td>
+                      </tr>
+                    )}
+                    {small.length > 0 && (
+                      <tr className={dim ? 'opacity-55' : ''}>
+                        <td colSpan={9} className="!pl-11 !py-2 text-[12px] text-text-muted">
+                          {tr(`已隐藏 ${small.length} 个 |盈亏| < $${SMALL_PNL} 的品种`, `${small.length} instrument(s) with |PnL| < $${SMALL_PNL} hidden`)}
+                          <span className="num ml-1.5">{signedUsd(small.reduce((s, r) => s + r.s.pnl, 0))}</span>
                         </td>
                       </tr>
                     )}
